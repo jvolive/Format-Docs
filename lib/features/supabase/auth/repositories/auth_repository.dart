@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:format_docs/features/supabase/auth/repositories/interfaces/i_auth_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -15,10 +14,7 @@ class AuthRepository implements IAuthRepository {
 
   @override
   Future<void> signInWithGoogle() async {
-    await _client.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: kIsWeb ? null : 'io.supabase.formatdocs://login-callback',
-    );
+    await _client.auth.signInWithOAuth(OAuthProvider.google, redirectTo: null);
   }
 
   @override
