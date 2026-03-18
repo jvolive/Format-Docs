@@ -3,8 +3,8 @@ import 'package:format_docs/features/supabase/auth/view_model/auth_view_model.da
 import 'package:get_it/get_it.dart';
 import 'package:supabase_auth_ui/supabase_auth_ui.dart';
 
-class LoginScreen extends StatelessWidget {
-  const LoginScreen({super.key});
+class LoginView extends StatelessWidget {
+  const LoginView({super.key});
 
   static const routeName = '/login';
 
