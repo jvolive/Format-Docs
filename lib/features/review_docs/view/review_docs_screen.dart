@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:format_docs/initializer.dart';
 import 'package:format_docs/features/review_docs/models/review_result.dart';
 import 'package:format_docs/features/review_docs/view_model/review_docs_view_model.dart';
@@ -292,16 +293,15 @@ class _IssueCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text('Parágrafo #${issue.paragraphIndex + 1}'),
             const SizedBox(height: 4),
-            Text('Encontrado: ${issue.found}'),
+            _CopyableIssueField(label: 'Encontrado', value: issue.found),
             const SizedBox(height: 4),
-            Text('Esperado: ${issue.expected}'),
+            _CopyableIssueField(label: 'Esperado', value: issue.expected),
             if (issue.paragraphText.trim().isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(
-                issue.paragraphText,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              _CopyableIssueField(
+                label: 'Trecho',
+                value: issue.paragraphText,
+                dense: false,
               ),
             ],
             const SizedBox(height: 8),
@@ -329,6 +329,84 @@ class _IssueCard extends StatelessWidget {
       case ReviewIssueType.paragraphSymbol:
         return 'Validação de símbolo §';
     }
+  }
+}
+
+class _CopyableIssueField extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool dense;
+
+  const _CopyableIssueField({
+    required this.label,
+    required this.value,
+    this.dense = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveValue = value.trim();
+
+    return Container(
+      padding:
+          dense
+              ? EdgeInsets.zero
+              : const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration:
+          dense
+              ? null
+              : BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: Theme.of(context).textTheme.bodyMedium,
+                children: [
+                  TextSpan(text: '$label: '),
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.baseline,
+                    baseline: TextBaseline.alphabetic,
+                    child: SelectableText(
+                      effectiveValue.isEmpty ? '-' : effectiveValue,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copiar $label',
+            onPressed:
+                effectiveValue.isEmpty
+                    ? null
+                    : () => _copyToClipboard(context, label, effectiveValue),
+            icon: const Icon(Icons.copy_rounded, size: 18),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copyToClipboard(
+    BuildContext context,
+    String label,
+    String text,
+  ) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$label copiado para a área de transferência.')),
+    );
   }
 }
 
