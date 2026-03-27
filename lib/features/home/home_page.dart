@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:format_docs/features/rules/view/rules_screen.dart';
 import 'package:format_docs/features/supabase/auth/auth_view_model.dart';
 import 'package:format_docs/features/supabase/auth/view/login_screen.dart';
+import 'package:format_docs/features/review_docs/view/review_docs_screen.dart';
 import 'package:get_it/get_it.dart';
 
 class HomePage extends StatelessWidget {
@@ -92,7 +93,10 @@ class HomePage extends StatelessWidget {
                     icon: Icons.find_in_page_outlined,
                     title: 'Revisar documento',
                     description: 'Analise e corrija a formatação do seu .docx',
-                    onTap: () => Navigator.of(context).pushNamed('/review'),
+                    onTap:
+                        () => Navigator.of(
+                          context,
+                        ).pushNamed(ReviewDocsScreen.routeName),
                   ),
                   _ActionCard(
                     icon: Icons.tune_outlined,

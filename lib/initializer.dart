@@ -4,6 +4,9 @@ import 'package:format_docs/features/rules/view_model/rules_view_model.dart';
 import 'package:format_docs/features/supabase/auth/auth_repository.dart';
 import 'package:format_docs/features/supabase/auth/auth_view_model.dart';
 import 'package:format_docs/features/supabase/services/string_env.dart';
+import 'package:format_docs/features/review_docs/data/review_docs_api_client.dart';
+import 'package:format_docs/features/review_docs/repository/review_docs_repository.dart';
+import 'package:format_docs/features/review_docs/view_model/review_docs_view_model.dart';
 import 'package:get_it/get_it.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -38,5 +41,21 @@ Future<void> initDependencies() async {
 
   getIt.registerLazySingleton<RulesViewModel>(
     () => RulesViewModel(repository: getIt<RulesRepositoryInterface>()),
+  );
+
+  getIt.registerLazySingleton<ReviewDocsApiClient>(
+    () => ReviewDocsApiClient(
+      functionsUrl: getIt<String>(instanceName: 'functionsUrl'),
+      supabaseClient: getIt<SupabaseClient>(),
+    ),
+  );
+
+  getIt.registerLazySingleton<ReviewDocsRepositoryInterface>(
+    () => ReviewDocsRepository(apiClient: getIt<ReviewDocsApiClient>()),
+  );
+
+  getIt.registerLazySingleton<ReviewDocsViewModel>(
+    () =>
+        ReviewDocsViewModel(repository: getIt<ReviewDocsRepositoryInterface>()),
   );
 }

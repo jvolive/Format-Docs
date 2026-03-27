@@ -3,6 +3,7 @@ import 'package:format_docs/features/home/home_page.dart';
 import 'package:format_docs/features/rules/view/rules_screen.dart';
 import 'package:format_docs/features/supabase/auth/auth_view_model.dart';
 import 'package:format_docs/features/supabase/auth/view/login_screen.dart';
+import 'package:format_docs/features/review_docs/view/review_docs_screen.dart';
 import 'package:format_docs/initializer.dart';
 import 'package:format_docs/features/supabase/services/supabase_config.dart';
 
@@ -27,10 +28,7 @@ class App extends StatelessWidget {
       routes: {
         LoginScreen.routeName: (_) => const LoginScreen(),
         HomePage.routeName: (_) => const HomePage(),
-        '/review':
-            (_) => const Scaffold(
-              body: Center(child: Text('Revisar documento — em breve')),
-            ),
+        ReviewDocsScreen.routeName: (_) => const ReviewDocsScreen(),
         RulesScreen.routeName: (_) => const RulesScreen(),
       },
     );
