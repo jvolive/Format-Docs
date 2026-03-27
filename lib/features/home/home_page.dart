@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:format_docs/features/supabase/auth/view_model/auth_view_model.dart';
+import 'package:format_docs/features/rules/view/rules_screen.dart';
+import 'package:format_docs/features/supabase/auth/auth_view_model.dart';
+import 'package:format_docs/features/supabase/auth/view/login_screen.dart';
 import 'package:get_it/get_it.dart';
 
 class HomePage extends StatelessWidget {
@@ -31,8 +33,20 @@ class HomePage extends StatelessWidget {
                   TextButton(
                     onPressed: () async {
                       await vm.signOut();
-                      if (context.mounted) {
-                        Navigator.of(context).pushReplacementNamed('/login');
+                      if (!context.mounted) return;
+
+                      if (vm.status == AuthStatus.unauthenticated) {
+                        Navigator.of(
+                          context,
+                        ).pushReplacementNamed(LoginScreen.routeName);
+                        return;
+                      }
+
+                      final error = vm.errorMessage;
+                      if (error != null) {
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text(error)));
                       }
                     },
                     child: const Text('Sair'),
@@ -84,7 +98,10 @@ class HomePage extends StatelessWidget {
                     icon: Icons.tune_outlined,
                     title: 'Gerenciar regras',
                     description: 'Configure gatilhos e substituições de texto',
-                    onTap: () => Navigator.of(context).pushNamed('/rules'),
+                    onTap:
+                        () => Navigator.of(
+                          context,
+                        ).pushNamed(RulesScreen.routeName),
                   ),
                 ],
               ),
