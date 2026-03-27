@@ -31,7 +31,7 @@ class _RulesScreenState extends State<RulesScreen> {
   Future<void> _openCreateRuleDialog() async {
     final rule = await showDialog<Rule>(
       context: context,
-      builder: (_) => const _CreateRuleDialog(),
+      builder: (_) => const _RuleFormDialog(),
     );
 
     if (rule == null || !mounted) return;
@@ -40,6 +40,36 @@ class _RulesScreenState extends State<RulesScreen> {
     if (!mounted) return;
 
     final message = _rulesViewModel.errorMessage ?? 'Regra criada com sucesso.';
+    final color =
+        _rulesViewModel.errorMessage == null
+            ? null
+            : Theme.of(context).colorScheme.error;
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+  }
+
+  Future<void> _openEditRuleDialog(Rule currentRule) async {
+    if (currentRule.id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Não foi possível editar esta regra.')),
+      );
+      return;
+    }
+
+    final updatedRule = await showDialog<Rule>(
+      context: context,
+      builder: (_) => _RuleFormDialog(initialRule: currentRule),
+    );
+
+    if (updatedRule == null || !mounted) return;
+
+    await _rulesViewModel.updateRule(updatedRule);
+    if (!mounted) return;
+
+    final message =
+        _rulesViewModel.errorMessage ?? 'Regra atualizada com sucesso.';
     final color =
         _rulesViewModel.errorMessage == null
             ? null
@@ -150,6 +180,10 @@ class _RulesScreenState extends State<RulesScreen> {
                       final rule = rules[index];
                       return _RuleCard(
                         rule: rule,
+                        onEdit:
+                            _rulesViewModel.isLoading
+                                ? null
+                                : () => _openEditRuleDialog(rule),
                         onDelete:
                             _rulesViewModel.isLoading
                                 ? null
@@ -177,9 +211,14 @@ class _RulesScreenState extends State<RulesScreen> {
 
 class _RuleCard extends StatelessWidget {
   final Rule rule;
+  final VoidCallback? onEdit;
   final VoidCallback? onDelete;
 
-  const _RuleCard({required this.rule, required this.onDelete});
+  const _RuleCard({
+    required this.rule,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -208,6 +247,11 @@ class _RuleCard extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Editar regra',
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined),
                 ),
                 IconButton(
                   tooltip: 'Excluir regra',
@@ -332,14 +376,16 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _CreateRuleDialog extends StatefulWidget {
-  const _CreateRuleDialog();
+class _RuleFormDialog extends StatefulWidget {
+  final Rule? initialRule;
+
+  const _RuleFormDialog({this.initialRule});
 
   @override
-  State<_CreateRuleDialog> createState() => _CreateRuleDialogState();
+  State<_RuleFormDialog> createState() => _RuleFormDialogState();
 }
 
-class _CreateRuleDialogState extends State<_CreateRuleDialog> {
+class _RuleFormDialogState extends State<_RuleFormDialog> {
   final _formKey = GlobalKey<FormState>();
   final _triggerController = TextEditingController();
   final _replacementController = TextEditingController();
@@ -349,6 +395,24 @@ class _CreateRuleDialogState extends State<_CreateRuleDialog> {
   bool _bold = false;
   bool _italic = true;
   bool _underline = false;
+
+  bool get _isEditMode => widget.initialRule != null;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final initial = widget.initialRule;
+    if (initial == null) return;
+
+    _ruleType = initial.ruleType;
+    _triggerController.text = initial.triggerWord;
+    _replacementController.text = initial.replacement ?? '';
+    _colorController.text = initial.color ?? '';
+    _bold = initial.bold;
+    _italic = initial.italic;
+    _underline = initial.underline;
+  }
 
   @override
   void dispose() {
@@ -390,6 +454,7 @@ class _CreateRuleDialogState extends State<_CreateRuleDialog> {
     final color = _colorController.text.trim();
 
     final rule = Rule(
+      id: widget.initialRule?.id,
       triggerWord: triggerWord,
       ruleType: _ruleType,
       replacement: replacement.isEmpty ? null : replacement,
@@ -411,7 +476,7 @@ class _CreateRuleDialogState extends State<_CreateRuleDialog> {
     final showFormatting = _ruleType == RuleType.formattingTrigger;
 
     return AlertDialog(
-      title: const Text('Nova regra'),
+      title: Text(_isEditMode ? 'Editar regra' : 'Nova regra'),
       content: SizedBox(
         width: 460,
         child: Form(
