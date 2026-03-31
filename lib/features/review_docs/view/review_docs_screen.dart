@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:format_docs/initializer.dart';
 import 'package:format_docs/features/review_docs/models/review_result.dart';
 import 'package:format_docs/features/review_docs/view_model/review_docs_view_model.dart';
+import 'package:format_docs/features/rules/repository/rules_repository.dart';
 import 'package:format_docs/features/review_html/utils/paste_helper.dart';
 
 class ReviewDocsScreen extends StatefulWidget {
@@ -24,6 +25,54 @@ class ReviewDocsScreen extends StatefulWidget {
 
 enum _IssueLayoutMode { columns, rows }
 
+const String _emptyRuleFilterKey = '__empty_rule__';
+
+class _RuleFilterItem {
+  final String key;
+  final int count;
+  final String fullLabel;
+  final String shortLabel;
+
+  const _RuleFilterItem({
+    required this.key,
+    required this.count,
+    required this.fullLabel,
+    required this.shortLabel,
+  });
+}
+
+String _ruleFilterKeyFromIssue(ReviewIssue issue) {
+  final raw = issue.ruleId.trim();
+  if (raw.isEmpty) return _emptyRuleFilterKey;
+  return raw;
+}
+
+String _ruleDisplayNameFromIssueWithFallback(
+  ReviewIssue issue, {
+  String? fallbackRuleName,
+}) {
+  final ruleName = issue.ruleName.trim();
+  if (ruleName.isNotEmpty) return ruleName;
+
+  final mappedName = fallbackRuleName?.trim() ?? '';
+  if (mappedName.isNotEmpty) return mappedName;
+
+  final ruleId = issue.ruleId.trim();
+  if (ruleId.isNotEmpty) return ruleId;
+
+  return 'Sem regra';
+}
+
+String _defaultRuleDisplayName(String ruleKey) {
+  if (ruleKey == _emptyRuleFilterKey) return 'Sem regra';
+  return ruleKey;
+}
+
+String _compactRuleFilterLabel(String displayName) {
+  if (displayName.length <= 24) return displayName;
+  return '${displayName.substring(0, 21)}...';
+}
+
 class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   static const String _acceptedFileExtensions = '.doc,.docx,.html';
 
@@ -33,7 +82,12 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   late final VoidCallback _removePasteInterceptor;
   _IssueLayoutMode _issueLayoutMode = _IssueLayoutMode.columns;
   final Set<ReviewIssueType> _activeFilters = {...ReviewIssueType.values};
+  final Set<String> _activeRuleFilters = <String>{};
   final Set<String> _collapsedRowCategoryIds = <String>{};
+  final Map<String, String> _ruleNamesById = <String, String>{};
+  ReviewResult? _syncedRuleFiltersResult;
+  bool _isResolvingRuleNames = false;
+  bool _ruleNamesResolutionScheduled = false;
 
   @override
   void initState() {
@@ -87,6 +141,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         fileName: picked.fileName,
         fileBytes: picked.fileBytes,
       );
+      await _ensureRuleNamesLoadedForCurrentResult();
     } catch (error) {
       if (!mounted) return;
       final message = error.toString().replaceFirst('Exception: ', '');
@@ -110,6 +165,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         fileName: 'conteudo.html',
         fileBytes: Uint8List.fromList(utf8.encode(htmlContent)),
       );
+      await _ensureRuleNamesLoadedForCurrentResult();
     } catch (error) {
       if (!mounted) return;
       final message = error.toString().replaceFirst('Exception: ', '');
@@ -185,6 +241,9 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         listenable: _viewModel,
         builder: (context, _) {
           final result = _viewModel.result;
+          final ruleFilters = _buildRuleFilters(result?.issues ?? const []);
+          _syncRuleFiltersForResult(result, ruleFilters);
+          _scheduleRuleNameResolutionIfNeeded(result);
 
           return ListView(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
@@ -310,6 +369,9 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                   summary: result.summary,
                   activeFilters: _activeFilters,
                   onToggleFilter: _toggleFilter,
+                  ruleFilters: ruleFilters,
+                  activeRuleFilters: _activeRuleFilters,
+                  onToggleRuleFilter: _toggleRuleFilter,
                 ),
                 const SizedBox(height: 14),
                 _IssuesByCategory(
@@ -317,6 +379,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                   issueBuckets: _viewModel.issueBuckets,
                   layoutMode: _issueLayoutMode,
                   activeFilters: _activeFilters,
+                  activeRuleFilters: _activeRuleFilters,
                   collapsedRowCategoryIds: _collapsedRowCategoryIds,
                   onToggleRowCategoryCollapse: _toggleRowCategoryCollapse,
                   onLayoutModeChanged: (mode) {
@@ -337,7 +400,12 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
       _activeFilters
         ..clear()
         ..addAll(ReviewIssueType.values);
+      _activeRuleFilters.clear();
       _collapsedRowCategoryIds.clear();
+      _ruleNamesById.clear();
+      _syncedRuleFiltersResult = null;
+      _isResolvingRuleNames = false;
+      _ruleNamesResolutionScheduled = false;
     });
     _htmlController.clear();
     _viewModel.clear();
@@ -365,17 +433,172 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
       _collapsedRowCategoryIds.add(categoryId);
     });
   }
+
+  void _toggleRuleFilter(String ruleKey) {
+    setState(() {
+      if (_activeRuleFilters.contains(ruleKey)) {
+        if (_activeRuleFilters.length == 1) return;
+        _activeRuleFilters.remove(ruleKey);
+        return;
+      }
+
+      _activeRuleFilters.add(ruleKey);
+    });
+  }
+
+  void _syncRuleFiltersForResult(
+    ReviewResult? result,
+    List<_RuleFilterItem> ruleFilters,
+  ) {
+    if (result == null) {
+      _syncedRuleFiltersResult = null;
+      _activeRuleFilters.clear();
+      return;
+    }
+
+    final availableRuleKeys = ruleFilters.map((item) => item.key).toSet();
+
+    if (!identical(_syncedRuleFiltersResult, result)) {
+      _syncedRuleFiltersResult = result;
+      _activeRuleFilters
+        ..clear()
+        ..addAll(availableRuleKeys);
+      return;
+    }
+
+    _activeRuleFilters.removeWhere((key) => !availableRuleKeys.contains(key));
+    if (_activeRuleFilters.isEmpty && availableRuleKeys.isNotEmpty) {
+      _activeRuleFilters.addAll(availableRuleKeys);
+    }
+  }
+
+  List<_RuleFilterItem> _buildRuleFilters(List<ReviewIssue> issues) {
+    if (issues.isEmpty) return const <_RuleFilterItem>[];
+
+    final counts = <String, int>{};
+    final displayNamesByRuleKey = <String, String>{};
+
+    for (final issue in issues) {
+      final key = _ruleFilterKeyFromIssue(issue);
+      counts.update(key, (current) => current + 1, ifAbsent: () => 1);
+
+      final fallbackRuleName = _ruleNamesById[issue.ruleId.trim()];
+      final candidateDisplayName = _ruleDisplayNameFromIssueWithFallback(
+        issue,
+        fallbackRuleName: fallbackRuleName,
+      );
+      final currentDisplayName = displayNamesByRuleKey[key];
+      if (currentDisplayName == null || currentDisplayName == key) {
+        displayNamesByRuleKey[key] = candidateDisplayName;
+      }
+    }
+
+    final entries =
+        counts.entries.toList()..sort((a, b) {
+          final byCount = b.value.compareTo(a.value);
+          if (byCount != 0) return byCount;
+          return a.key.compareTo(b.key);
+        });
+
+    return List<_RuleFilterItem>.unmodifiable(
+      entries.map(
+        (entry) => _RuleFilterItem(
+          key: entry.key,
+          count: entry.value,
+          fullLabel:
+              displayNamesByRuleKey[entry.key] ??
+              _defaultRuleDisplayName(entry.key),
+          shortLabel: _compactRuleFilterLabel(
+            displayNamesByRuleKey[entry.key] ??
+                _defaultRuleDisplayName(entry.key),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _ensureRuleNamesLoadedForCurrentResult() async {
+    if (_isResolvingRuleNames) return;
+
+    final result = _viewModel.result;
+    if (result == null) return;
+
+    final unresolvedRuleIds =
+        result.issues
+            .map((issue) => issue.ruleId.trim())
+            .where((id) => id.isNotEmpty && !_ruleNamesById.containsKey(id))
+            .toSet();
+
+    if (unresolvedRuleIds.isEmpty) return;
+
+    _isResolvingRuleNames = true;
+    try {
+      final rules = await getIt<RulesRepositoryInterface>().fetchRules();
+      if (!mounted) return;
+
+      var changed = false;
+      for (final rule in rules) {
+        final id = rule.id;
+        if (id == null || id.trim().isEmpty) continue;
+
+        final name = rule.triggerWord.trim();
+        if (name.isEmpty) continue;
+
+        if (_ruleNamesById[id] != name) {
+          _ruleNamesById[id] = name;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        setState(() {});
+      }
+    } catch (_) {
+      // Mantém fallback por id quando a busca de regras não estiver disponível.
+    } finally {
+      _isResolvingRuleNames = false;
+    }
+  }
+
+  void _scheduleRuleNameResolutionIfNeeded(ReviewResult? result) {
+    if (result == null ||
+        _isResolvingRuleNames ||
+        _ruleNamesResolutionScheduled) {
+      return;
+    }
+
+    final unresolvedRuleIds =
+        result.issues
+            .map((issue) => issue.ruleId.trim())
+            .where((id) => id.isNotEmpty && !_ruleNamesById.containsKey(id))
+            .toSet();
+
+    if (unresolvedRuleIds.isEmpty) return;
+
+    _ruleNamesResolutionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _ruleNamesResolutionScheduled = false;
+      if (!mounted) return;
+      await _ensureRuleNamesLoadedForCurrentResult();
+    });
+  }
 }
 
 class _SummaryCard extends StatelessWidget {
   final ReviewSummary summary;
   final Set<ReviewIssueType> activeFilters;
   final ValueChanged<ReviewIssueType> onToggleFilter;
+  final List<_RuleFilterItem> ruleFilters;
+  final Set<String> activeRuleFilters;
+  final ValueChanged<String> onToggleRuleFilter;
 
   const _SummaryCard({
     required this.summary,
     required this.activeFilters,
     required this.onToggleFilter,
+    required this.ruleFilters,
+    required this.activeRuleFilters,
+    required this.onToggleRuleFilter,
   });
 
   @override
@@ -432,6 +655,32 @@ class _SummaryCard extends StatelessWidget {
                     );
                   }).toList(),
             ),
+            if (ruleFilters.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Filtrar por regra',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children:
+                    ruleFilters.map((item) {
+                      final isSelected = activeRuleFilters.contains(item.key);
+                      return Tooltip(
+                        message: item.fullLabel,
+                        child: FilterChip(
+                          selected: isSelected,
+                          label: Text('${item.shortLabel}: ${item.count}'),
+                          onSelected: (_) => onToggleRuleFilter(item.key),
+                        ),
+                      );
+                    }).toList(),
+              ),
+            ],
           ],
         ),
       ),
@@ -444,6 +693,7 @@ class _IssuesByCategory extends StatelessWidget {
   final ReviewIssueBuckets issueBuckets;
   final _IssueLayoutMode layoutMode;
   final Set<ReviewIssueType> activeFilters;
+  final Set<String> activeRuleFilters;
   final Set<String> collapsedRowCategoryIds;
   final ValueChanged<String> onToggleRowCategoryCollapse;
   final ValueChanged<_IssueLayoutMode> onLayoutModeChanged;
@@ -453,6 +703,7 @@ class _IssuesByCategory extends StatelessWidget {
     required this.issueBuckets,
     required this.layoutMode,
     required this.activeFilters,
+    required this.activeRuleFilters,
     required this.collapsedRowCategoryIds,
     required this.onToggleRowCategoryCollapse,
     required this.onLayoutModeChanged,
@@ -466,21 +717,21 @@ class _IssuesByCategory extends StatelessWidget {
           id: 'formatting',
           title: 'Formatação',
           icon: Icons.format_italic_rounded,
-          issues: issueBuckets.formatting,
+          issues: _filterIssuesByRule(issueBuckets.formatting),
         ),
       if (activeFilters.contains(ReviewIssueType.wordSubstitution))
         _IssueCategoryColumnData(
           id: 'substitution',
           title: 'Substituição',
           icon: Icons.find_replace_rounded,
-          issues: issueBuckets.substitutions,
+          issues: _filterIssuesByRule(issueBuckets.substitutions),
         ),
       if (activeFilters.contains(ReviewIssueType.paragraphSymbol))
         _IssueCategoryColumnData(
           id: 'symbol',
           title: 'Símbolo §',
           icon: Icons.rule_rounded,
-          issues: issueBuckets.symbols,
+          issues: _filterIssuesByRule(issueBuckets.symbols),
         ),
     ];
 
@@ -551,6 +802,16 @@ class _IssuesByCategory extends StatelessWidget {
               ),
       ],
     );
+  }
+
+  List<ReviewIssue> _filterIssuesByRule(List<ReviewIssue> source) {
+    if (activeRuleFilters.isEmpty) return const <ReviewIssue>[];
+
+    return source
+        .where(
+          (issue) => activeRuleFilters.contains(_ruleFilterKeyFromIssue(issue)),
+        )
+        .toList(growable: false);
   }
 }
 

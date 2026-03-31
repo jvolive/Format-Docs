@@ -34,6 +34,7 @@ class ReviewIssue {
   final String found;
   final String expected;
   final String ruleId;
+  final String ruleName;
   final bool autoFixable;
 
   const ReviewIssue({
@@ -43,6 +44,7 @@ class ReviewIssue {
     required this.found,
     required this.expected,
     required this.ruleId,
+    required this.ruleName,
     required this.autoFixable,
   });
 
@@ -54,6 +56,11 @@ class ReviewIssue {
       found: (json['found'] as String?) ?? '',
       expected: (json['expected'] as String?) ?? '',
       ruleId: (json['rule_id'] as String?) ?? '',
+      ruleName:
+          (json['rule_name'] as String?) ??
+          (json['rule_label'] as String?) ??
+          (json['rule_trigger_word'] as String?) ??
+          '',
       autoFixable: json['auto_fixable'] as bool? ?? false,
     );
   }
