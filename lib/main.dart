@@ -11,7 +11,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await SupabaseConfig.initialize();
-  await initDependencies();
+  await Initializer.initDependencies();
 
   runApp(const App());
 }
