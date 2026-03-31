@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:format_docs/initializer.dart';
 import 'package:format_docs/features/review_docs/models/review_result.dart';
 import 'package:format_docs/features/review_docs/view_model/review_docs_view_model.dart';
+import 'package:format_docs/features/rules/repository/rules_repository.dart';
 import 'package:format_docs/features/review_html/utils/paste_helper.dart';
 
 class ReviewDocsScreen extends StatefulWidget {
@@ -22,6 +23,56 @@ class ReviewDocsScreen extends StatefulWidget {
   State<ReviewDocsScreen> createState() => _ReviewDocsScreenState();
 }
 
+enum _IssueLayoutMode { columns, rows }
+
+const String _emptyRuleFilterKey = '__empty_rule__';
+
+class _RuleFilterItem {
+  final String key;
+  final int count;
+  final String fullLabel;
+  final String shortLabel;
+
+  const _RuleFilterItem({
+    required this.key,
+    required this.count,
+    required this.fullLabel,
+    required this.shortLabel,
+  });
+}
+
+String _ruleFilterKeyFromIssue(ReviewIssue issue) {
+  final raw = issue.ruleId.trim();
+  if (raw.isEmpty) return _emptyRuleFilterKey;
+  return raw;
+}
+
+String _ruleDisplayNameFromIssueWithFallback(
+  ReviewIssue issue, {
+  String? fallbackRuleName,
+}) {
+  final ruleName = issue.ruleName.trim();
+  if (ruleName.isNotEmpty) return ruleName;
+
+  final mappedName = fallbackRuleName?.trim() ?? '';
+  if (mappedName.isNotEmpty) return mappedName;
+
+  final ruleId = issue.ruleId.trim();
+  if (ruleId.isNotEmpty) return ruleId;
+
+  return 'Sem regra';
+}
+
+String _defaultRuleDisplayName(String ruleKey) {
+  if (ruleKey == _emptyRuleFilterKey) return 'Sem regra';
+  return ruleKey;
+}
+
+String _compactRuleFilterLabel(String displayName) {
+  if (displayName.length <= 24) return displayName;
+  return '${displayName.substring(0, 21)}...';
+}
+
 class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   static const String _acceptedFileExtensions = '.doc,.docx,.html';
 
@@ -29,6 +80,14 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   late final TextEditingController _htmlController;
   late final FocusNode _htmlFocusNode;
   late final VoidCallback _removePasteInterceptor;
+  _IssueLayoutMode _issueLayoutMode = _IssueLayoutMode.columns;
+  final Set<ReviewIssueType> _activeFilters = {...ReviewIssueType.values};
+  final Set<String> _activeRuleFilters = <String>{};
+  final Set<String> _collapsedRowCategoryIds = <String>{};
+  final Map<String, String> _ruleNamesById = <String, String>{};
+  ReviewResult? _syncedRuleFiltersResult;
+  bool _isResolvingRuleNames = false;
+  bool _ruleNamesResolutionScheduled = false;
 
   @override
   void initState() {
@@ -82,6 +141,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         fileName: picked.fileName,
         fileBytes: picked.fileBytes,
       );
+      await _ensureRuleNamesLoadedForCurrentResult();
     } catch (error) {
       if (!mounted) return;
       final message = error.toString().replaceFirst('Exception: ', '');
@@ -105,6 +165,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         fileName: 'conteudo.html',
         fileBytes: Uint8List.fromList(utf8.encode(htmlContent)),
       );
+      await _ensureRuleNamesLoadedForCurrentResult();
     } catch (error) {
       if (!mounted) return;
       final message = error.toString().replaceFirst('Exception: ', '');
@@ -180,6 +241,9 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         listenable: _viewModel,
         builder: (context, _) {
           final result = _viewModel.result;
+          final ruleFilters = _buildRuleFilters(result?.issues ?? const []);
+          _syncRuleFiltersForResult(result, ruleFilters);
+          _scheduleRuleNameResolutionIfNeeded(result);
 
           return ListView(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
@@ -301,33 +365,28 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
               ],
               if (result != null) ...[
                 const SizedBox(height: 14),
-                _SummaryCard(summary: result.summary),
-                const SizedBox(height: 14),
-                Text(
-                  'Problemas encontrados (${result.issues.length})',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                _SummaryCard(
+                  summary: result.summary,
+                  activeFilters: _activeFilters,
+                  onToggleFilter: _toggleFilter,
+                  ruleFilters: ruleFilters,
+                  activeRuleFilters: _activeRuleFilters,
+                  onToggleRuleFilter: _toggleRuleFilter,
                 ),
-                const SizedBox(height: 8),
-                if (result.issues.isEmpty)
-                  Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'Nenhum problema encontrado para as regras atuais.',
-                      ),
-                    ),
-                  ),
-                ...result.issues.map((issue) => _IssueCard(issue: issue)),
+                const SizedBox(height: 14),
+                _IssuesByCategory(
+                  totalIssues: result.issues.length,
+                  issueBuckets: _viewModel.issueBuckets,
+                  layoutMode: _issueLayoutMode,
+                  activeFilters: _activeFilters,
+                  activeRuleFilters: _activeRuleFilters,
+                  collapsedRowCategoryIds: _collapsedRowCategoryIds,
+                  onToggleRowCategoryCollapse: _toggleRowCategoryCollapse,
+                  onLayoutModeChanged: (mode) {
+                    if (_issueLayoutMode == mode) return;
+                    setState(() => _issueLayoutMode = mode);
+                  },
+                ),
               ],
             ],
           );
@@ -337,15 +396,443 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   }
 
   void _clearAll() {
+    setState(() {
+      _activeFilters
+        ..clear()
+        ..addAll(ReviewIssueType.values);
+      _activeRuleFilters.clear();
+      _collapsedRowCategoryIds.clear();
+      _ruleNamesById.clear();
+      _syncedRuleFiltersResult = null;
+      _isResolvingRuleNames = false;
+      _ruleNamesResolutionScheduled = false;
+    });
     _htmlController.clear();
     _viewModel.clear();
+  }
+
+  void _toggleFilter(ReviewIssueType issueType) {
+    setState(() {
+      if (_activeFilters.contains(issueType)) {
+        if (_activeFilters.length == 1) return;
+        _activeFilters.remove(issueType);
+        return;
+      }
+
+      _activeFilters.add(issueType);
+    });
+  }
+
+  void _toggleRowCategoryCollapse(String categoryId) {
+    setState(() {
+      if (_collapsedRowCategoryIds.contains(categoryId)) {
+        _collapsedRowCategoryIds.remove(categoryId);
+        return;
+      }
+
+      _collapsedRowCategoryIds.add(categoryId);
+    });
+  }
+
+  void _toggleRuleFilter(String ruleKey) {
+    setState(() {
+      if (_activeRuleFilters.contains(ruleKey)) {
+        if (_activeRuleFilters.length == 1) return;
+        _activeRuleFilters.remove(ruleKey);
+        return;
+      }
+
+      _activeRuleFilters.add(ruleKey);
+    });
+  }
+
+  void _syncRuleFiltersForResult(
+    ReviewResult? result,
+    List<_RuleFilterItem> ruleFilters,
+  ) {
+    if (result == null) {
+      _syncedRuleFiltersResult = null;
+      _activeRuleFilters.clear();
+      return;
+    }
+
+    final availableRuleKeys = ruleFilters.map((item) => item.key).toSet();
+
+    if (!identical(_syncedRuleFiltersResult, result)) {
+      _syncedRuleFiltersResult = result;
+      _activeRuleFilters
+        ..clear()
+        ..addAll(availableRuleKeys);
+      return;
+    }
+
+    _activeRuleFilters.removeWhere((key) => !availableRuleKeys.contains(key));
+    if (_activeRuleFilters.isEmpty && availableRuleKeys.isNotEmpty) {
+      _activeRuleFilters.addAll(availableRuleKeys);
+    }
+  }
+
+  List<_RuleFilterItem> _buildRuleFilters(List<ReviewIssue> issues) {
+    if (issues.isEmpty) return const <_RuleFilterItem>[];
+
+    final counts = <String, int>{};
+    final displayNamesByRuleKey = <String, String>{};
+
+    for (final issue in issues) {
+      final key = _ruleFilterKeyFromIssue(issue);
+      counts.update(key, (current) => current + 1, ifAbsent: () => 1);
+
+      final fallbackRuleName = _ruleNamesById[issue.ruleId.trim()];
+      final candidateDisplayName = _ruleDisplayNameFromIssueWithFallback(
+        issue,
+        fallbackRuleName: fallbackRuleName,
+      );
+      final currentDisplayName = displayNamesByRuleKey[key];
+      if (currentDisplayName == null || currentDisplayName == key) {
+        displayNamesByRuleKey[key] = candidateDisplayName;
+      }
+    }
+
+    final entries =
+        counts.entries.toList()..sort((a, b) {
+          final byCount = b.value.compareTo(a.value);
+          if (byCount != 0) return byCount;
+          return a.key.compareTo(b.key);
+        });
+
+    return List<_RuleFilterItem>.unmodifiable(
+      entries.map(
+        (entry) => _RuleFilterItem(
+          key: entry.key,
+          count: entry.value,
+          fullLabel:
+              displayNamesByRuleKey[entry.key] ??
+              _defaultRuleDisplayName(entry.key),
+          shortLabel: _compactRuleFilterLabel(
+            displayNamesByRuleKey[entry.key] ??
+                _defaultRuleDisplayName(entry.key),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _ensureRuleNamesLoadedForCurrentResult() async {
+    if (_isResolvingRuleNames) return;
+
+    final result = _viewModel.result;
+    if (result == null) return;
+
+    final unresolvedRuleIds =
+        result.issues
+            .map((issue) => issue.ruleId.trim())
+            .where((id) => id.isNotEmpty && !_ruleNamesById.containsKey(id))
+            .toSet();
+
+    if (unresolvedRuleIds.isEmpty) return;
+
+    _isResolvingRuleNames = true;
+    try {
+      final rules = await getIt<RulesRepositoryInterface>().fetchRules();
+      if (!mounted) return;
+
+      var changed = false;
+      for (final rule in rules) {
+        final id = rule.id;
+        if (id == null || id.trim().isEmpty) continue;
+
+        final name = rule.triggerWord.trim();
+        if (name.isEmpty) continue;
+
+        if (_ruleNamesById[id] != name) {
+          _ruleNamesById[id] = name;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        setState(() {});
+      }
+    } catch (_) {
+      // Mantém fallback por id quando a busca de regras não estiver disponível.
+    } finally {
+      _isResolvingRuleNames = false;
+    }
+  }
+
+  void _scheduleRuleNameResolutionIfNeeded(ReviewResult? result) {
+    if (result == null ||
+        _isResolvingRuleNames ||
+        _ruleNamesResolutionScheduled) {
+      return;
+    }
+
+    final unresolvedRuleIds =
+        result.issues
+            .map((issue) => issue.ruleId.trim())
+            .where((id) => id.isNotEmpty && !_ruleNamesById.containsKey(id))
+            .toSet();
+
+    if (unresolvedRuleIds.isEmpty) return;
+
+    _ruleNamesResolutionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _ruleNamesResolutionScheduled = false;
+      if (!mounted) return;
+      await _ensureRuleNamesLoadedForCurrentResult();
+    });
   }
 }
 
 class _SummaryCard extends StatelessWidget {
   final ReviewSummary summary;
+  final Set<ReviewIssueType> activeFilters;
+  final ValueChanged<ReviewIssueType> onToggleFilter;
+  final List<_RuleFilterItem> ruleFilters;
+  final Set<String> activeRuleFilters;
+  final ValueChanged<String> onToggleRuleFilter;
 
-  const _SummaryCard({required this.summary});
+  const _SummaryCard({
+    required this.summary,
+    required this.activeFilters,
+    required this.onToggleFilter,
+    required this.ruleFilters,
+    required this.activeRuleFilters,
+    required this.onToggleRuleFilter,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final filterItems = [
+      (
+        type: ReviewIssueType.formattingTrigger,
+        label: 'Formatação',
+        count: summary.formattingTrigger,
+      ),
+      (
+        type: ReviewIssueType.wordSubstitution,
+        label: 'Substituição',
+        count: summary.wordSubstitution,
+      ),
+      (
+        type: ReviewIssueType.paragraphSymbol,
+        label: 'Símbolo §',
+        count: summary.paragraphSymbol,
+      ),
+    ];
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Total: ${summary.totalIssues}',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children:
+                  filterItems.map((item) {
+                    final isSelected = activeFilters.contains(item.type);
+                    return FilterChip(
+                      selected: isSelected,
+                      label: Text('${item.label}: ${item.count}'),
+                      onSelected: (_) => onToggleFilter(item.type),
+                    );
+                  }).toList(),
+            ),
+            if (ruleFilters.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Filtrar por regra',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children:
+                    ruleFilters.map((item) {
+                      final isSelected = activeRuleFilters.contains(item.key);
+                      return Tooltip(
+                        message: item.fullLabel,
+                        child: FilterChip(
+                          selected: isSelected,
+                          label: Text('${item.shortLabel}: ${item.count}'),
+                          onSelected: (_) => onToggleRuleFilter(item.key),
+                        ),
+                      );
+                    }).toList(),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IssuesByCategory extends StatelessWidget {
+  final int totalIssues;
+  final ReviewIssueBuckets issueBuckets;
+  final _IssueLayoutMode layoutMode;
+  final Set<ReviewIssueType> activeFilters;
+  final Set<String> activeRuleFilters;
+  final Set<String> collapsedRowCategoryIds;
+  final ValueChanged<String> onToggleRowCategoryCollapse;
+  final ValueChanged<_IssueLayoutMode> onLayoutModeChanged;
+
+  const _IssuesByCategory({
+    required this.totalIssues,
+    required this.issueBuckets,
+    required this.layoutMode,
+    required this.activeFilters,
+    required this.activeRuleFilters,
+    required this.collapsedRowCategoryIds,
+    required this.onToggleRowCategoryCollapse,
+    required this.onLayoutModeChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final categories = <_IssueCategoryColumnData>[
+      if (activeFilters.contains(ReviewIssueType.formattingTrigger))
+        _IssueCategoryColumnData(
+          id: 'formatting',
+          title: 'Formatação',
+          icon: Icons.format_italic_rounded,
+          issues: _filterIssuesByRule(issueBuckets.formatting),
+        ),
+      if (activeFilters.contains(ReviewIssueType.wordSubstitution))
+        _IssueCategoryColumnData(
+          id: 'substitution',
+          title: 'Substituição',
+          icon: Icons.find_replace_rounded,
+          issues: _filterIssuesByRule(issueBuckets.substitutions),
+        ),
+      if (activeFilters.contains(ReviewIssueType.paragraphSymbol))
+        _IssueCategoryColumnData(
+          id: 'symbol',
+          title: 'Símbolo §',
+          icon: Icons.rule_rounded,
+          issues: _filterIssuesByRule(issueBuckets.symbols),
+        ),
+    ];
+
+    final filteredTotalIssues = categories.fold<int>(
+      0,
+      (sum, item) => sum + item.issues.length,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          alignment: WrapAlignment.spaceBetween,
+          children: [
+            Text(
+              'Problemas encontrados ($filteredTotalIssues de $totalIssues)',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            SegmentedButton<_IssueLayoutMode>(
+              segments: const [
+                ButtonSegment<_IssueLayoutMode>(
+                  value: _IssueLayoutMode.columns,
+                  icon: Icon(Icons.view_week_rounded),
+                  label: Text('Colunas'),
+                ),
+                ButtonSegment<_IssueLayoutMode>(
+                  value: _IssueLayoutMode.rows,
+                  icon: Icon(Icons.view_agenda_rounded),
+                  label: Text('Linhas'),
+                ),
+              ],
+              selected: {layoutMode},
+              onSelectionChanged: (selection) {
+                if (selection.isEmpty) return;
+                onLayoutModeChanged(selection.first);
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (totalIssues == 0)
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+                width: 0.5,
+              ),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Nenhum problema encontrado para as regras atuais.'),
+            ),
+          )
+        else
+          layoutMode == _IssueLayoutMode.columns
+              ? _ColumnsIssuesLayout(categories: categories)
+              : _RowsIssuesLayout(
+                categories: categories,
+                collapsedCategoryIds: collapsedRowCategoryIds,
+                onToggleCategoryCollapse: onToggleRowCategoryCollapse,
+              ),
+      ],
+    );
+  }
+
+  List<ReviewIssue> _filterIssuesByRule(List<ReviewIssue> source) {
+    if (activeRuleFilters.isEmpty) return const <ReviewIssue>[];
+
+    return source
+        .where(
+          (issue) => activeRuleFilters.contains(_ruleFilterKeyFromIssue(issue)),
+        )
+        .toList(growable: false);
+  }
+}
+
+class _IssueCategoryColumnData {
+  final String id;
+  final String title;
+  final IconData icon;
+  final List<ReviewIssue> issues;
+
+  const _IssueCategoryColumnData({
+    required this.id,
+    required this.title,
+    required this.icon,
+    required this.issues,
+  });
+}
+
+class _IssueCategoryColumn extends StatelessWidget {
+  final _IssueCategoryColumnData data;
+
+  const _IssueCategoryColumn({required this.data});
 
   @override
   Widget build(BuildContext context) {
@@ -359,36 +846,232 @@ class _SummaryCard extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _chip('Total: ${summary.totalIssues}'),
-            _chip('Formatação: ${summary.formattingTrigger}'),
-            _chip('Substituição: ${summary.wordSubstitution}'),
-            _chip('Símbolo §: ${summary.paragraphSymbol}'),
+            Row(
+              children: [
+                Icon(
+                  data.icon,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    data.title,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Chip(label: Text('${data.issues.length}')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (data.issues.isEmpty)
+              Text(
+                'Nenhum item nesta categoria.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              )
+            else
+              Column(
+                children: [
+                  for (var i = 0; i < data.issues.length; i++) ...[
+                    _IssueCard(issue: data.issues[i], margin: EdgeInsets.zero),
+                    if (i < data.issues.length - 1) const SizedBox(height: 8),
+                  ],
+                ],
+              ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _chip(String label) {
-    return Chip(label: Text(label));
+class _ColumnsIssuesLayout extends StatelessWidget {
+  final List<_IssueCategoryColumnData> categories;
+
+  const _ColumnsIssuesLayout({required this.categories});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 1100) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < categories.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(child: _IssueCategoryColumn(data: categories[i])),
+              ],
+            ],
+          );
+        }
+
+        return Column(
+          children: [
+            for (var i = 0; i < categories.length; i++) ...[
+              _IssueCategoryColumn(data: categories[i]),
+              if (i < categories.length - 1) const SizedBox(height: 12),
+            ],
+          ],
+        );
+      },
+    );
   }
 }
 
-class _IssueCard extends StatelessWidget {
-  final ReviewIssue issue;
+class _RowsIssuesLayout extends StatelessWidget {
+  final List<_IssueCategoryColumnData> categories;
+  final Set<String> collapsedCategoryIds;
+  final ValueChanged<String> onToggleCategoryCollapse;
 
-  const _IssueCard({required this.issue});
+  const _RowsIssuesLayout({
+    required this.categories,
+    required this.collapsedCategoryIds,
+    required this.onToggleCategoryCollapse,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final rowItems = _buildRows(categories);
+    return Column(
+      children: [
+        for (var i = 0; i < rowItems.length; i++) ...[
+          _rowItemWidget(rowItems[i]),
+          if (i < rowItems.length - 1) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+
+  List<_IssueRowItem> _buildRows(List<_IssueCategoryColumnData> categories) {
+    final result = <_IssueRowItem>[];
+
+    for (final category in categories) {
+      final isCollapsed = collapsedCategoryIds.contains(category.id);
+      result.add(_IssueRowItem.category(category, isCollapsed));
+      if (isCollapsed) continue;
+      for (final issue in category.issues) {
+        result.add(_IssueRowItem.issue(issue));
+      }
+    }
+
+    return result;
+  }
+
+  Widget _rowItemWidget(_IssueRowItem item) {
+    if (item.category != null) {
+      return _IssueRowCategoryHeader(
+        category: item.category!,
+        isCollapsed: item.isCollapsed,
+        onToggleCollapse: () => onToggleCategoryCollapse(item.category!.id),
+      );
+    }
+
+    return _IssueCard(issue: item.issue!, margin: EdgeInsets.zero);
+  }
+}
+
+class _IssueRowItem {
+  final _IssueCategoryColumnData? category;
+  final ReviewIssue? issue;
+  final bool isCollapsed;
+
+  const _IssueRowItem._({this.category, this.issue, this.isCollapsed = false});
+
+  factory _IssueRowItem.category(
+    _IssueCategoryColumnData value,
+    bool isCollapsed,
+  ) {
+    return _IssueRowItem._(category: value, isCollapsed: isCollapsed);
+  }
+
+  factory _IssueRowItem.issue(ReviewIssue value) {
+    return _IssueRowItem._(issue: value);
+  }
+}
+
+class _IssueRowCategoryHeader extends StatelessWidget {
+  final _IssueCategoryColumnData category;
+  final bool isCollapsed;
+  final VoidCallback onToggleCollapse;
+
+  const _IssueRowCategoryHeader({
+    required this.category,
+    required this.isCollapsed,
+    required this.onToggleCollapse,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              category.icon,
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                category.title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Chip(label: Text('${category.issues.length}')),
+            IconButton(
+              tooltip:
+                  isCollapsed ? 'Expandir categoria' : 'Minimizar categoria',
+              onPressed: onToggleCollapse,
+              icon: Icon(
+                isCollapsed
+                    ? Icons.keyboard_arrow_down_rounded
+                    : Icons.keyboard_arrow_up_rounded,
+              ),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IssueCard extends StatelessWidget {
+  final ReviewIssue issue;
+  final EdgeInsetsGeometry margin;
+
+  const _IssueCard({
+    required this.issue,
+    this.margin = const EdgeInsets.only(bottom: 10),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      margin: margin,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
@@ -421,16 +1104,6 @@ class _IssueCard extends StatelessWidget {
                 dense: false,
               ),
             ],
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Chip(
-                  label: Text(
-                    issue.autoFixable ? 'Auto-corrigível' : 'Somente relatório',
-                  ),
-                ),
-              ],
-            ),
           ],
         ),
       ),
@@ -460,9 +1133,19 @@ class _CopyableIssueField extends StatelessWidget {
     this.dense = true,
   });
 
+  static const int _densePreviewLimit = 180;
+  static const int _expandedPreviewLimit = 900;
+
   @override
   Widget build(BuildContext context) {
     final effectiveValue = value.trim();
+    final previewLimit = dense ? _densePreviewLimit : _expandedPreviewLimit;
+    final hasText = effectiveValue.isNotEmpty;
+    final isPreviewTruncated = hasText && effectiveValue.length > previewLimit;
+    final previewText =
+        isPreviewTruncated
+            ? '${effectiveValue.substring(0, previewLimit)}…'
+            : effectiveValue;
 
     return Container(
       padding:
@@ -480,23 +1163,43 @@ class _CopyableIssueField extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: RichText(
-              text: TextSpan(
-                style: Theme.of(context).textTheme.bodyMedium,
-                children: [
-                  TextSpan(text: '$label: '),
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.baseline,
-                    baseline: TextBaseline.alphabetic,
-                    child: SelectableText(
-                      effectiveValue.isEmpty ? '-' : effectiveValue,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$label:',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                if (dense)
+                  Text(
+                    hasText ? previewText : '-',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  )
+                else
+                  SelectableText(
+                    hasText ? previewText : '-',
+                    maxLines: 8,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                if (isPreviewTruncated) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Prévia reduzida para manter a performance. Use copiar para obter o texto completo.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
           ),
           IconButton(
