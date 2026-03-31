@@ -303,31 +303,10 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                 const SizedBox(height: 14),
                 _SummaryCard(summary: result.summary),
                 const SizedBox(height: 14),
-                Text(
-                  'Problemas encontrados (${result.issues.length})',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                _IssuesByCategory(
+                  totalIssues: result.issues.length,
+                  issueBuckets: _viewModel.issueBuckets,
                 ),
-                const SizedBox(height: 8),
-                if (result.issues.isEmpty)
-                  Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                        width: 0.5,
-                      ),
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'Nenhum problema encontrado para as regras atuais.',
-                      ),
-                    ),
-                  ),
-                ...result.issues.map((issue) => _IssueCard(issue: issue)),
               ],
             ],
           );
@@ -379,16 +358,203 @@ class _SummaryCard extends StatelessWidget {
   }
 }
 
-class _IssueCard extends StatelessWidget {
-  final ReviewIssue issue;
+class _IssuesByCategory extends StatelessWidget {
+  final int totalIssues;
+  final ReviewIssueBuckets issueBuckets;
 
-  const _IssueCard({required this.issue});
+  const _IssuesByCategory({
+    required this.totalIssues,
+    required this.issueBuckets,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final categories = [
+      _IssueCategoryColumnData(
+        id: 'formatting',
+        title: 'Formatação',
+        icon: Icons.format_italic_rounded,
+        issues: issueBuckets.formatting,
+      ),
+      _IssueCategoryColumnData(
+        id: 'substitution',
+        title: 'Substituição',
+        icon: Icons.find_replace_rounded,
+        issues: issueBuckets.substitutions,
+      ),
+      _IssueCategoryColumnData(
+        id: 'symbol',
+        title: 'Símbolo §',
+        icon: Icons.rule_rounded,
+        issues: issueBuckets.symbols,
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Problemas encontrados ($totalIssues)',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        if (totalIssues == 0)
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+                width: 0.5,
+              ),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Nenhum problema encontrado para as regras atuais.'),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth >= 1100) {
+                return SizedBox(
+                  height: 620,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var i = 0; i < categories.length; i++) ...[
+                        if (i > 0) const SizedBox(width: 12),
+                        Expanded(
+                          child: _IssueCategoryColumn(data: categories[i]),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              }
+
+              return Column(
+                children: [
+                  for (var i = 0; i < categories.length; i++) ...[
+                    SizedBox(
+                      height: 340,
+                      child: _IssueCategoryColumn(data: categories[i]),
+                    ),
+                    if (i < categories.length - 1) const SizedBox(height: 12),
+                  ],
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+class _IssueCategoryColumnData {
+  final String id;
+  final String title;
+  final IconData icon;
+  final List<ReviewIssue> issues;
+
+  const _IssueCategoryColumnData({
+    required this.id,
+    required this.title,
+    required this.icon,
+    required this.issues,
+  });
+}
+
+class _IssueCategoryColumn extends StatelessWidget {
+  final _IssueCategoryColumnData data;
+
+  const _IssueCategoryColumn({required this.data});
 
   @override
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  data.icon,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    data.title,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Chip(label: Text('${data.issues.length}')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child:
+                  data.issues.isEmpty
+                      ? Center(
+                        child: Text(
+                          'Nenhum item nesta categoria.',
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall?.copyWith(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      )
+                      : ListView.separated(
+                        key: PageStorageKey<String>('issues-${data.id}'),
+                        itemBuilder: (context, index) {
+                          return _IssueCard(
+                            issue: data.issues[index],
+                            margin: EdgeInsets.zero,
+                          );
+                        },
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemCount: data.issues.length,
+                      ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IssueCard extends StatelessWidget {
+  final ReviewIssue issue;
+  final EdgeInsetsGeometry margin;
+
+  const _IssueCard({
+    required this.issue,
+    this.margin = const EdgeInsets.only(bottom: 10),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      margin: margin,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
@@ -460,9 +626,19 @@ class _CopyableIssueField extends StatelessWidget {
     this.dense = true,
   });
 
+  static const int _densePreviewLimit = 180;
+  static const int _expandedPreviewLimit = 900;
+
   @override
   Widget build(BuildContext context) {
     final effectiveValue = value.trim();
+    final previewLimit = dense ? _densePreviewLimit : _expandedPreviewLimit;
+    final hasText = effectiveValue.isNotEmpty;
+    final isPreviewTruncated = hasText && effectiveValue.length > previewLimit;
+    final previewText =
+        isPreviewTruncated
+            ? '${effectiveValue.substring(0, previewLimit)}…'
+            : effectiveValue;
 
     return Container(
       padding:
@@ -480,23 +656,43 @@ class _CopyableIssueField extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: RichText(
-              text: TextSpan(
-                style: Theme.of(context).textTheme.bodyMedium,
-                children: [
-                  TextSpan(text: '$label: '),
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.baseline,
-                    baseline: TextBaseline.alphabetic,
-                    child: SelectableText(
-                      effectiveValue.isEmpty ? '-' : effectiveValue,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$label:',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                if (dense)
+                  Text(
+                    hasText ? previewText : '-',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  )
+                else
+                  SelectableText(
+                    hasText ? previewText : '-',
+                    maxLines: 8,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                if (isPreviewTruncated) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Prévia reduzida para manter a performance. Use copiar para obter o texto completo.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
           ),
           IconButton(
