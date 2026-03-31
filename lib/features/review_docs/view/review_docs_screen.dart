@@ -33,6 +33,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   late final VoidCallback _removePasteInterceptor;
   _IssueLayoutMode _issueLayoutMode = _IssueLayoutMode.columns;
   final Set<ReviewIssueType> _activeFilters = {...ReviewIssueType.values};
+  final Set<String> _collapsedRowCategoryIds = <String>{};
 
   @override
   void initState() {
@@ -316,6 +317,8 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                   issueBuckets: _viewModel.issueBuckets,
                   layoutMode: _issueLayoutMode,
                   activeFilters: _activeFilters,
+                  collapsedRowCategoryIds: _collapsedRowCategoryIds,
+                  onToggleRowCategoryCollapse: _toggleRowCategoryCollapse,
                   onLayoutModeChanged: (mode) {
                     if (_issueLayoutMode == mode) return;
                     setState(() => _issueLayoutMode = mode);
@@ -334,6 +337,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
       _activeFilters
         ..clear()
         ..addAll(ReviewIssueType.values);
+      _collapsedRowCategoryIds.clear();
     });
     _htmlController.clear();
     _viewModel.clear();
@@ -348,6 +352,17 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
       }
 
       _activeFilters.add(issueType);
+    });
+  }
+
+  void _toggleRowCategoryCollapse(String categoryId) {
+    setState(() {
+      if (_collapsedRowCategoryIds.contains(categoryId)) {
+        _collapsedRowCategoryIds.remove(categoryId);
+        return;
+      }
+
+      _collapsedRowCategoryIds.add(categoryId);
     });
   }
 }
@@ -429,6 +444,8 @@ class _IssuesByCategory extends StatelessWidget {
   final ReviewIssueBuckets issueBuckets;
   final _IssueLayoutMode layoutMode;
   final Set<ReviewIssueType> activeFilters;
+  final Set<String> collapsedRowCategoryIds;
+  final ValueChanged<String> onToggleRowCategoryCollapse;
   final ValueChanged<_IssueLayoutMode> onLayoutModeChanged;
 
   const _IssuesByCategory({
@@ -436,6 +453,8 @@ class _IssuesByCategory extends StatelessWidget {
     required this.issueBuckets,
     required this.layoutMode,
     required this.activeFilters,
+    required this.collapsedRowCategoryIds,
+    required this.onToggleRowCategoryCollapse,
     required this.onLayoutModeChanged,
   });
 
@@ -525,7 +544,11 @@ class _IssuesByCategory extends StatelessWidget {
         else
           layoutMode == _IssueLayoutMode.columns
               ? _ColumnsIssuesLayout(categories: categories)
-              : _RowsIssuesLayout(categories: categories),
+              : _RowsIssuesLayout(
+                categories: categories,
+                collapsedCategoryIds: collapsedRowCategoryIds,
+                onToggleCategoryCollapse: onToggleRowCategoryCollapse,
+              ),
       ],
     );
   }
@@ -586,32 +609,22 @@ class _IssueCategoryColumn extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Expanded(
-              child:
-                  data.issues.isEmpty
-                      ? Center(
-                        child: Text(
-                          'Nenhum item nesta categoria.',
-                          style: Theme.of(
-                            context,
-                          ).textTheme.bodySmall?.copyWith(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      )
-                      : ListView.separated(
-                        key: PageStorageKey<String>('issues-${data.id}'),
-                        itemBuilder: (context, index) {
-                          return _IssueCard(
-                            issue: data.issues[index],
-                            margin: EdgeInsets.zero,
-                          );
-                        },
-                        separatorBuilder: (_, _) => const SizedBox(height: 8),
-                        itemCount: data.issues.length,
-                      ),
-            ),
+            if (data.issues.isEmpty)
+              Text(
+                'Nenhum item nesta categoria.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              )
+            else
+              Column(
+                children: [
+                  for (var i = 0; i < data.issues.length; i++) ...[
+                    _IssueCard(issue: data.issues[i], margin: EdgeInsets.zero),
+                    if (i < data.issues.length - 1) const SizedBox(height: 8),
+                  ],
+                ],
+              ),
           ],
         ),
       ),
@@ -629,27 +642,21 @@ class _ColumnsIssuesLayout extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth >= 1100) {
-          return SizedBox(
-            height: 620,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < categories.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 12),
-                  Expanded(child: _IssueCategoryColumn(data: categories[i])),
-                ],
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < categories.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(child: _IssueCategoryColumn(data: categories[i])),
               ],
-            ),
+            ],
           );
         }
 
         return Column(
           children: [
             for (var i = 0; i < categories.length; i++) ...[
-              SizedBox(
-                height: 340,
-                child: _IssueCategoryColumn(data: categories[i]),
-              ),
+              _IssueCategoryColumn(data: categories[i]),
               if (i < categories.length - 1) const SizedBox(height: 12),
             ],
           ],
@@ -661,35 +668,25 @@ class _ColumnsIssuesLayout extends StatelessWidget {
 
 class _RowsIssuesLayout extends StatelessWidget {
   final List<_IssueCategoryColumnData> categories;
+  final Set<String> collapsedCategoryIds;
+  final ValueChanged<String> onToggleCategoryCollapse;
 
-  const _RowsIssuesLayout({required this.categories});
+  const _RowsIssuesLayout({
+    required this.categories,
+    required this.collapsedCategoryIds,
+    required this.onToggleCategoryCollapse,
+  });
 
   @override
   Widget build(BuildContext context) {
     final rowItems = _buildRows(categories);
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final height = constraints.maxWidth >= 1100 ? 680.0 : 560.0;
-
-        return SizedBox(
-          height: height,
-          child: ListView.separated(
-            key: const PageStorageKey<String>('issues-rows-layout'),
-            itemBuilder: (context, index) {
-              final item = rowItems[index];
-
-              if (item.category != null) {
-                return _IssueRowCategoryHeader(category: item.category!);
-              }
-
-              return _IssueCard(issue: item.issue!, margin: EdgeInsets.zero);
-            },
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemCount: rowItems.length,
-          ),
-        );
-      },
+    return Column(
+      children: [
+        for (var i = 0; i < rowItems.length; i++) ...[
+          _rowItemWidget(rowItems[i]),
+          if (i < rowItems.length - 1) const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 
@@ -697,7 +694,9 @@ class _RowsIssuesLayout extends StatelessWidget {
     final result = <_IssueRowItem>[];
 
     for (final category in categories) {
-      result.add(_IssueRowItem.category(category));
+      final isCollapsed = collapsedCategoryIds.contains(category.id);
+      result.add(_IssueRowItem.category(category, isCollapsed));
+      if (isCollapsed) continue;
       for (final issue in category.issues) {
         result.add(_IssueRowItem.issue(issue));
       }
@@ -705,16 +704,32 @@ class _RowsIssuesLayout extends StatelessWidget {
 
     return result;
   }
+
+  Widget _rowItemWidget(_IssueRowItem item) {
+    if (item.category != null) {
+      return _IssueRowCategoryHeader(
+        category: item.category!,
+        isCollapsed: item.isCollapsed,
+        onToggleCollapse: () => onToggleCategoryCollapse(item.category!.id),
+      );
+    }
+
+    return _IssueCard(issue: item.issue!, margin: EdgeInsets.zero);
+  }
 }
 
 class _IssueRowItem {
   final _IssueCategoryColumnData? category;
   final ReviewIssue? issue;
+  final bool isCollapsed;
 
-  const _IssueRowItem._({this.category, this.issue});
+  const _IssueRowItem._({this.category, this.issue, this.isCollapsed = false});
 
-  factory _IssueRowItem.category(_IssueCategoryColumnData value) {
-    return _IssueRowItem._(category: value);
+  factory _IssueRowItem.category(
+    _IssueCategoryColumnData value,
+    bool isCollapsed,
+  ) {
+    return _IssueRowItem._(category: value, isCollapsed: isCollapsed);
   }
 
   factory _IssueRowItem.issue(ReviewIssue value) {
@@ -724,8 +739,14 @@ class _IssueRowItem {
 
 class _IssueRowCategoryHeader extends StatelessWidget {
   final _IssueCategoryColumnData category;
+  final bool isCollapsed;
+  final VoidCallback onToggleCollapse;
 
-  const _IssueRowCategoryHeader({required this.category});
+  const _IssueRowCategoryHeader({
+    required this.category,
+    required this.isCollapsed,
+    required this.onToggleCollapse,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -758,6 +779,17 @@ class _IssueRowCategoryHeader extends StatelessWidget {
               ),
             ),
             Chip(label: Text('${category.issues.length}')),
+            IconButton(
+              tooltip:
+                  isCollapsed ? 'Expandir categoria' : 'Minimizar categoria',
+              onPressed: onToggleCollapse,
+              icon: Icon(
+                isCollapsed
+                    ? Icons.keyboard_arrow_down_rounded
+                    : Icons.keyboard_arrow_up_rounded,
+              ),
+              visualDensity: VisualDensity.compact,
+            ),
           ],
         ),
       ),
@@ -811,16 +843,6 @@ class _IssueCard extends StatelessWidget {
                 dense: false,
               ),
             ],
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Chip(
-                  label: Text(
-                    issue.autoFixable ? 'Auto-corrigível' : 'Somente relatório',
-                  ),
-                ),
-              ],
-            ),
           ],
         ),
       ),
