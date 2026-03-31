@@ -22,6 +22,8 @@ class ReviewDocsScreen extends StatefulWidget {
   State<ReviewDocsScreen> createState() => _ReviewDocsScreenState();
 }
 
+enum _IssueLayoutMode { columns, rows }
+
 class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   static const String _acceptedFileExtensions = '.doc,.docx,.html';
 
@@ -29,6 +31,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   late final TextEditingController _htmlController;
   late final FocusNode _htmlFocusNode;
   late final VoidCallback _removePasteInterceptor;
+  _IssueLayoutMode _issueLayoutMode = _IssueLayoutMode.columns;
 
   @override
   void initState() {
@@ -306,6 +309,11 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                 _IssuesByCategory(
                   totalIssues: result.issues.length,
                   issueBuckets: _viewModel.issueBuckets,
+                  layoutMode: _issueLayoutMode,
+                  onLayoutModeChanged: (mode) {
+                    if (_issueLayoutMode == mode) return;
+                    setState(() => _issueLayoutMode = mode);
+                  },
                 ),
               ],
             ],
@@ -361,10 +369,14 @@ class _SummaryCard extends StatelessWidget {
 class _IssuesByCategory extends StatelessWidget {
   final int totalIssues;
   final ReviewIssueBuckets issueBuckets;
+  final _IssueLayoutMode layoutMode;
+  final ValueChanged<_IssueLayoutMode> onLayoutModeChanged;
 
   const _IssuesByCategory({
     required this.totalIssues,
     required this.issueBuckets,
+    required this.layoutMode,
+    required this.onLayoutModeChanged,
   });
 
   @override
@@ -393,11 +405,38 @@ class _IssuesByCategory extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Problemas encontrados ($totalIssues)',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          alignment: WrapAlignment.spaceBetween,
+          children: [
+            Text(
+              'Problemas encontrados ($totalIssues)',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            SegmentedButton<_IssueLayoutMode>(
+              segments: const [
+                ButtonSegment<_IssueLayoutMode>(
+                  value: _IssueLayoutMode.columns,
+                  icon: Icon(Icons.view_week_rounded),
+                  label: Text('Colunas'),
+                ),
+                ButtonSegment<_IssueLayoutMode>(
+                  value: _IssueLayoutMode.rows,
+                  icon: Icon(Icons.view_agenda_rounded),
+                  label: Text('Linhas'),
+                ),
+              ],
+              selected: {layoutMode},
+              onSelectionChanged: (selection) {
+                if (selection.isEmpty) return;
+                onLayoutModeChanged(selection.first);
+              },
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         if (totalIssues == 0)
@@ -416,38 +455,9 @@ class _IssuesByCategory extends StatelessWidget {
             ),
           )
         else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              if (constraints.maxWidth >= 1100) {
-                return SizedBox(
-                  height: 620,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (var i = 0; i < categories.length; i++) ...[
-                        if (i > 0) const SizedBox(width: 12),
-                        Expanded(
-                          child: _IssueCategoryColumn(data: categories[i]),
-                        ),
-                      ],
-                    ],
-                  ),
-                );
-              }
-
-              return Column(
-                children: [
-                  for (var i = 0; i < categories.length; i++) ...[
-                    SizedBox(
-                      height: 340,
-                      child: _IssueCategoryColumn(data: categories[i]),
-                    ),
-                    if (i < categories.length - 1) const SizedBox(height: 12),
-                  ],
-                ],
-              );
-            },
-          ),
+          layoutMode == _IssueLayoutMode.columns
+              ? _ColumnsIssuesLayout(categories: categories)
+              : _RowsIssuesLayout(categories: categories),
       ],
     );
   }
@@ -534,6 +544,152 @@ class _IssueCategoryColumn extends StatelessWidget {
                         itemCount: data.issues.length,
                       ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ColumnsIssuesLayout extends StatelessWidget {
+  final List<_IssueCategoryColumnData> categories;
+
+  const _ColumnsIssuesLayout({required this.categories});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 1100) {
+          return SizedBox(
+            height: 620,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < categories.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 12),
+                  Expanded(child: _IssueCategoryColumn(data: categories[i])),
+                ],
+              ],
+            ),
+          );
+        }
+
+        return Column(
+          children: [
+            for (var i = 0; i < categories.length; i++) ...[
+              SizedBox(
+                height: 340,
+                child: _IssueCategoryColumn(data: categories[i]),
+              ),
+              if (i < categories.length - 1) const SizedBox(height: 12),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _RowsIssuesLayout extends StatelessWidget {
+  final List<_IssueCategoryColumnData> categories;
+
+  const _RowsIssuesLayout({required this.categories});
+
+  @override
+  Widget build(BuildContext context) {
+    final rowItems = _buildRows(categories);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height = constraints.maxWidth >= 1100 ? 680.0 : 560.0;
+
+        return SizedBox(
+          height: height,
+          child: ListView.separated(
+            key: const PageStorageKey<String>('issues-rows-layout'),
+            itemBuilder: (context, index) {
+              final item = rowItems[index];
+
+              if (item.category != null) {
+                return _IssueRowCategoryHeader(category: item.category!);
+              }
+
+              return _IssueCard(issue: item.issue!, margin: EdgeInsets.zero);
+            },
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemCount: rowItems.length,
+          ),
+        );
+      },
+    );
+  }
+
+  List<_IssueRowItem> _buildRows(List<_IssueCategoryColumnData> categories) {
+    final result = <_IssueRowItem>[];
+
+    for (final category in categories) {
+      result.add(_IssueRowItem.category(category));
+      for (final issue in category.issues) {
+        result.add(_IssueRowItem.issue(issue));
+      }
+    }
+
+    return result;
+  }
+}
+
+class _IssueRowItem {
+  final _IssueCategoryColumnData? category;
+  final ReviewIssue? issue;
+
+  const _IssueRowItem._({this.category, this.issue});
+
+  factory _IssueRowItem.category(_IssueCategoryColumnData value) {
+    return _IssueRowItem._(category: value);
+  }
+
+  factory _IssueRowItem.issue(ReviewIssue value) {
+    return _IssueRowItem._(issue: value);
+  }
+}
+
+class _IssueRowCategoryHeader extends StatelessWidget {
+  final _IssueCategoryColumnData category;
+
+  const _IssueRowCategoryHeader({required this.category});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              category.icon,
+              size: 18,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                category.title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            Chip(label: Text('${category.issues.length}')),
           ],
         ),
       ),
