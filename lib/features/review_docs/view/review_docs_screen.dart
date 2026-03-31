@@ -32,6 +32,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   late final FocusNode _htmlFocusNode;
   late final VoidCallback _removePasteInterceptor;
   _IssueLayoutMode _issueLayoutMode = _IssueLayoutMode.columns;
+  final Set<ReviewIssueType> _activeFilters = {...ReviewIssueType.values};
 
   @override
   void initState() {
@@ -304,12 +305,17 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
               ],
               if (result != null) ...[
                 const SizedBox(height: 14),
-                _SummaryCard(summary: result.summary),
+                _SummaryCard(
+                  summary: result.summary,
+                  activeFilters: _activeFilters,
+                  onToggleFilter: _toggleFilter,
+                ),
                 const SizedBox(height: 14),
                 _IssuesByCategory(
                   totalIssues: result.issues.length,
                   issueBuckets: _viewModel.issueBuckets,
                   layoutMode: _issueLayoutMode,
+                  activeFilters: _activeFilters,
                   onLayoutModeChanged: (mode) {
                     if (_issueLayoutMode == mode) return;
                     setState(() => _issueLayoutMode = mode);
@@ -324,18 +330,59 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   }
 
   void _clearAll() {
+    setState(() {
+      _activeFilters
+        ..clear()
+        ..addAll(ReviewIssueType.values);
+    });
     _htmlController.clear();
     _viewModel.clear();
+  }
+
+  void _toggleFilter(ReviewIssueType issueType) {
+    setState(() {
+      if (_activeFilters.contains(issueType)) {
+        if (_activeFilters.length == 1) return;
+        _activeFilters.remove(issueType);
+        return;
+      }
+
+      _activeFilters.add(issueType);
+    });
   }
 }
 
 class _SummaryCard extends StatelessWidget {
   final ReviewSummary summary;
+  final Set<ReviewIssueType> activeFilters;
+  final ValueChanged<ReviewIssueType> onToggleFilter;
 
-  const _SummaryCard({required this.summary});
+  const _SummaryCard({
+    required this.summary,
+    required this.activeFilters,
+    required this.onToggleFilter,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final filterItems = [
+      (
+        type: ReviewIssueType.formattingTrigger,
+        label: 'Formatação',
+        count: summary.formattingTrigger,
+      ),
+      (
+        type: ReviewIssueType.wordSubstitution,
+        label: 'Substituição',
+        count: summary.wordSubstitution,
+      ),
+      (
+        type: ReviewIssueType.paragraphSymbol,
+        label: 'Símbolo §',
+        count: summary.paragraphSymbol,
+      ),
+    ];
+
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -347,22 +394,33 @@ class _SummaryCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _chip('Total: ${summary.totalIssues}'),
-            _chip('Formatação: ${summary.formattingTrigger}'),
-            _chip('Substituição: ${summary.wordSubstitution}'),
-            _chip('Símbolo §: ${summary.paragraphSymbol}'),
+            Text(
+              'Total: ${summary.totalIssues}',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children:
+                  filterItems.map((item) {
+                    final isSelected = activeFilters.contains(item.type);
+                    return FilterChip(
+                      selected: isSelected,
+                      label: Text('${item.label}: ${item.count}'),
+                      onSelected: (_) => onToggleFilter(item.type),
+                    );
+                  }).toList(),
+            ),
           ],
         ),
       ),
     );
-  }
-
-  Widget _chip(String label) {
-    return Chip(label: Text(label));
   }
 }
 
@@ -370,37 +428,47 @@ class _IssuesByCategory extends StatelessWidget {
   final int totalIssues;
   final ReviewIssueBuckets issueBuckets;
   final _IssueLayoutMode layoutMode;
+  final Set<ReviewIssueType> activeFilters;
   final ValueChanged<_IssueLayoutMode> onLayoutModeChanged;
 
   const _IssuesByCategory({
     required this.totalIssues,
     required this.issueBuckets,
     required this.layoutMode,
+    required this.activeFilters,
     required this.onLayoutModeChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    final categories = [
-      _IssueCategoryColumnData(
-        id: 'formatting',
-        title: 'Formatação',
-        icon: Icons.format_italic_rounded,
-        issues: issueBuckets.formatting,
-      ),
-      _IssueCategoryColumnData(
-        id: 'substitution',
-        title: 'Substituição',
-        icon: Icons.find_replace_rounded,
-        issues: issueBuckets.substitutions,
-      ),
-      _IssueCategoryColumnData(
-        id: 'symbol',
-        title: 'Símbolo §',
-        icon: Icons.rule_rounded,
-        issues: issueBuckets.symbols,
-      ),
+    final categories = <_IssueCategoryColumnData>[
+      if (activeFilters.contains(ReviewIssueType.formattingTrigger))
+        _IssueCategoryColumnData(
+          id: 'formatting',
+          title: 'Formatação',
+          icon: Icons.format_italic_rounded,
+          issues: issueBuckets.formatting,
+        ),
+      if (activeFilters.contains(ReviewIssueType.wordSubstitution))
+        _IssueCategoryColumnData(
+          id: 'substitution',
+          title: 'Substituição',
+          icon: Icons.find_replace_rounded,
+          issues: issueBuckets.substitutions,
+        ),
+      if (activeFilters.contains(ReviewIssueType.paragraphSymbol))
+        _IssueCategoryColumnData(
+          id: 'symbol',
+          title: 'Símbolo §',
+          icon: Icons.rule_rounded,
+          issues: issueBuckets.symbols,
+        ),
     ];
+
+    final filteredTotalIssues = categories.fold<int>(
+      0,
+      (sum, item) => sum + item.issues.length,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -412,7 +480,7 @@ class _IssuesByCategory extends StatelessWidget {
           alignment: WrapAlignment.spaceBetween,
           children: [
             Text(
-              'Problemas encontrados ($totalIssues)',
+              'Problemas encontrados ($filteredTotalIssues de $totalIssues)',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
