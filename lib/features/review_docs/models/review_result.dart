@@ -110,7 +110,10 @@ class ReviewResult {
                 (issue) => ReviewIssue.fromJson(issue as Map<String, dynamic>),
               )
               .toList(),
-      fixedDocxBase64: (json['fixed_docx_base64'] as String?) ?? '',
+      fixedDocxBase64:
+          (json['fixed_docx_base64'] as String?) ??
+          (json['fixed_html_base64'] as String?) ??
+          '',
       fixedFilename: (json['fixed_filename'] as String?) ?? 'reviewed.docx',
     );
   }

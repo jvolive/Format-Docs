@@ -92,7 +92,8 @@ class HomePage extends StatelessWidget {
                   _ActionCard(
                     icon: Icons.find_in_page_outlined,
                     title: 'Revisar documento',
-                    description: 'Analise e corrija a formatação do seu .docx',
+                    description:
+                        'Analise e corrija arquivos .doc, .docx ou .html',
                     onTap:
                         () => Navigator.of(
                           context,
