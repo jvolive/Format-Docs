@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:format_docs/initializer.dart';
 import 'package:format_docs/features/review_docs/models/review_result.dart';
 import 'package:format_docs/features/review_docs/view_model/review_docs_view_model.dart';
+import 'package:format_docs/features/review_html/utils/paste_helper.dart';
 
 class ReviewDocsScreen extends StatefulWidget {
   const ReviewDocsScreen({super.key});
@@ -22,17 +23,59 @@ class ReviewDocsScreen extends StatefulWidget {
 }
 
 class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
+  static const String _acceptedFileExtensions = '.doc,.docx,.html';
+
   late final ReviewDocsViewModel _viewModel;
+  late final TextEditingController _htmlController;
+  late final FocusNode _htmlFocusNode;
+  late final VoidCallback _removePasteInterceptor;
 
   @override
   void initState() {
     super.initState();
     _viewModel = getIt<ReviewDocsViewModel>();
+    _htmlController = TextEditingController();
+    _htmlFocusNode = FocusNode();
+    _removePasteInterceptor = interceptHtmlPaste(
+      canHandlePaste: () => _htmlFocusNode.hasFocus,
+      onHtmlPasted: _insertPastedHtml,
+    );
+  }
+
+  @override
+  void dispose() {
+    _removePasteInterceptor();
+    _htmlFocusNode.dispose();
+    _htmlController.dispose();
+    super.dispose();
+  }
+
+  void _insertPastedHtml(String htmlContent) {
+    final currentValue = _htmlController.value;
+    final selection = currentValue.selection;
+
+    if (!selection.isValid) {
+      _htmlController.text = htmlContent;
+      return;
+    }
+
+    final text = currentValue.text;
+    final safeStart = selection.start.clamp(0, text.length);
+    final safeEnd = selection.end.clamp(0, text.length);
+
+    final newText = text.replaceRange(safeStart, safeEnd, htmlContent);
+    final newOffset = safeStart + htmlContent.length;
+
+    _htmlController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newOffset),
+      composing: TextRange.empty,
+    );
   }
 
   Future<void> _pickAndReviewDocument() async {
     try {
-      final picked = await _pickDocxFile();
+      final picked = await _pickSupportedFile();
       if (picked == null || !mounted) return;
 
       await _viewModel.reviewDocument(
@@ -48,10 +91,33 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
     }
   }
 
-  Future<_PickedDocx?> _pickDocxFile() async {
+  Future<void> _reviewHtmlContent() async {
+    final htmlContent = _htmlController.text.trim();
+    if (htmlContent.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cole o HTML para iniciar a revisão.')),
+      );
+      return;
+    }
+
+    try {
+      await _viewModel.reviewDocument(
+        fileName: 'conteudo.html',
+        fileBytes: Uint8List.fromList(utf8.encode(htmlContent)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final message = error.toString().replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<_PickedReviewFile?> _pickSupportedFile() async {
     final input =
         html.FileUploadInputElement()
-          ..accept = '.docx'
+          ..accept = _acceptedFileExtensions
           ..multiple = false;
 
     input.click();
@@ -59,9 +125,14 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
 
     final file = input.files?.first;
     if (file == null) return null;
+    if (!_isSupportedFileName(file.name)) {
+      throw Exception(
+        'Formato inválido. Envie um arquivo .doc, .docx ou .html.',
+      );
+    }
 
     final bytes = await _readFileAsBytes(file);
-    return _PickedDocx(fileName: file.name, fileBytes: bytes);
+    return _PickedReviewFile(fileName: file.name, fileBytes: bytes);
   }
 
   Future<Uint8List> _readFileAsBytes(html.File file) async {
@@ -94,21 +165,11 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
     return completer.future;
   }
 
-  void _downloadFixedDocument(ReviewResult result) {
-    final bytes = base64Decode(result.fixedDocxBase64);
-    final blob = html.Blob(
-      [bytes],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    );
-    final url = html.Url.createObjectUrlFromBlob(blob);
-
-    final anchor =
-        html.AnchorElement(href: url)
-          ..setAttribute('download', result.fixedFilename)
-          ..click();
-
-    anchor.remove();
-    html.Url.revokeObjectUrl(url);
+  bool _isSupportedFileName(String fileName) {
+    final normalized = fileName.toLowerCase();
+    return normalized.endsWith('.doc') ||
+        normalized.endsWith('.docx') ||
+        normalized.endsWith('.html');
   }
 
   @override
@@ -138,7 +199,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Envie um arquivo .docx para revisar com suas regras.',
+                        'Envie um arquivo .doc, .docx ou .html para revisar com suas regras.',
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
                       const SizedBox(height: 12),
@@ -150,12 +211,11 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                                     ? null
                                     : _pickAndReviewDocument,
                             icon: const Icon(Icons.upload_file_rounded),
-                            label: const Text('Selecionar .docx'),
+                            label: const Text('Selecionar arquivo'),
                           ),
                           const SizedBox(width: 10),
                           OutlinedButton(
-                            onPressed:
-                                _viewModel.isLoading ? null : _viewModel.clear,
+                            onPressed: _viewModel.isLoading ? null : _clearAll,
                             child: const Text('Limpar'),
                           ),
                         ],
@@ -173,6 +233,64 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 14),
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                    width: 0.5,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Revisão por HTML (colar texto)',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Cole seu HTML no campo abaixo e clique em "Revisar HTML colado".',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _htmlController,
+                        focusNode: _htmlFocusNode,
+                        enabled: !_viewModel.isLoading,
+                        minLines: 8,
+                        maxLines: 14,
+                        style: const TextStyle(fontFamily: 'monospace'),
+                        decoration: InputDecoration(
+                          hintText: 'Digite aqui seu texto...',
+                          border: const OutlineInputBorder(),
+                          filled: true,
+                          fillColor:
+                              Theme.of(context).colorScheme.surfaceContainerLow,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.tonalIcon(
+                          onPressed:
+                              _viewModel.isLoading ? null : _reviewHtmlContent,
+                          icon: const Icon(Icons.code_rounded),
+                          label: const Text('Revisar HTML colado'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               if (_viewModel.isLoading) ...[
                 const SizedBox(height: 12),
                 const LinearProgressIndicator(),
@@ -184,12 +302,6 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
               if (result != null) ...[
                 const SizedBox(height: 14),
                 _SummaryCard(summary: result.summary),
-                const SizedBox(height: 14),
-                FilledButton.icon(
-                  onPressed: () => _downloadFixedDocument(result),
-                  icon: const Icon(Icons.download_rounded),
-                  label: const Text('Baixar .docx corrigido'),
-                ),
                 const SizedBox(height: 14),
                 Text(
                   'Problemas encontrados (${result.issues.length})',
@@ -222,6 +334,11 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         },
       ),
     );
+  }
+
+  void _clearAll() {
+    _htmlController.clear();
+    _viewModel.clear();
   }
 }
 
@@ -432,9 +549,9 @@ class _ErrorBox extends StatelessWidget {
   }
 }
 
-class _PickedDocx {
+class _PickedReviewFile {
   final String fileName;
   final Uint8List fileBytes;
 
-  const _PickedDocx({required this.fileName, required this.fileBytes});
+  const _PickedReviewFile({required this.fileName, required this.fileBytes});
 }
