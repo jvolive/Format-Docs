@@ -83,9 +83,11 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
   _IssueLayoutMode _issueLayoutMode = _IssueLayoutMode.columns;
   final Set<ReviewIssueType> _activeFilters = {...ReviewIssueType.values};
   final Set<String> _activeRuleFilters = <String>{};
+  final Set<ReviewIssue> _reviewedIssues = <ReviewIssue>{};
   final Set<String> _collapsedRowCategoryIds = <String>{};
   final Map<String, String> _ruleNamesById = <String, String>{};
   ReviewResult? _syncedRuleFiltersResult;
+  ReviewResult? _syncedReviewedIssuesResult;
   bool _isResolvingRuleNames = false;
   bool _ruleNamesResolutionScheduled = false;
 
@@ -243,6 +245,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
           final result = _viewModel.result;
           final ruleFilters = _buildRuleFilters(result?.issues ?? const []);
           _syncRuleFiltersForResult(result, ruleFilters);
+          _syncReviewedIssuesForResult(result);
           _scheduleRuleNameResolutionIfNeeded(result);
 
           return ListView(
@@ -367,6 +370,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                 const SizedBox(height: 14),
                 _SummaryCard(
                   summary: result.summary,
+                  reviewedIssuesCount: _reviewedIssues.length,
                   activeFilters: _activeFilters,
                   onToggleFilter: _toggleFilter,
                   ruleFilters: ruleFilters,
@@ -380,6 +384,8 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
                   layoutMode: _issueLayoutMode,
                   activeFilters: _activeFilters,
                   activeRuleFilters: _activeRuleFilters,
+                  isIssueReviewed: _isIssueReviewed,
+                  onToggleIssueReviewed: _toggleIssueReviewed,
                   collapsedRowCategoryIds: _collapsedRowCategoryIds,
                   onToggleRowCategoryCollapse: _toggleRowCategoryCollapse,
                   onLayoutModeChanged: (mode) {
@@ -401,9 +407,11 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
         ..clear()
         ..addAll(ReviewIssueType.values);
       _activeRuleFilters.clear();
+      _reviewedIssues.clear();
       _collapsedRowCategoryIds.clear();
       _ruleNamesById.clear();
       _syncedRuleFiltersResult = null;
+      _syncedReviewedIssuesResult = null;
       _isResolvingRuleNames = false;
       _ruleNamesResolutionScheduled = false;
     });
@@ -470,6 +478,33 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
     if (_activeRuleFilters.isEmpty && availableRuleKeys.isNotEmpty) {
       _activeRuleFilters.addAll(availableRuleKeys);
     }
+  }
+
+  void _syncReviewedIssuesForResult(ReviewResult? result) {
+    if (result == null) {
+      _syncedReviewedIssuesResult = null;
+      _reviewedIssues.clear();
+      return;
+    }
+
+    if (!identical(_syncedReviewedIssuesResult, result)) {
+      _syncedReviewedIssuesResult = result;
+      _reviewedIssues.clear();
+    }
+  }
+
+  bool _isIssueReviewed(ReviewIssue issue) {
+    return _reviewedIssues.contains(issue);
+  }
+
+  void _toggleIssueReviewed(ReviewIssue issue) {
+    setState(() {
+      if (_reviewedIssues.contains(issue)) {
+        _reviewedIssues.remove(issue);
+        return;
+      }
+      _reviewedIssues.add(issue);
+    });
   }
 
   List<_RuleFilterItem> _buildRuleFilters(List<ReviewIssue> issues) {
@@ -586,6 +621,7 @@ class _ReviewDocsScreenState extends State<ReviewDocsScreen> {
 
 class _SummaryCard extends StatelessWidget {
   final ReviewSummary summary;
+  final int reviewedIssuesCount;
   final Set<ReviewIssueType> activeFilters;
   final ValueChanged<ReviewIssueType> onToggleFilter;
   final List<_RuleFilterItem> ruleFilters;
@@ -594,6 +630,7 @@ class _SummaryCard extends StatelessWidget {
 
   const _SummaryCard({
     required this.summary,
+    required this.reviewedIssuesCount,
     required this.activeFilters,
     required this.onToggleFilter,
     required this.ruleFilters,
@@ -635,13 +672,43 @@ class _SummaryCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Wrap(
+              spacing: 16,
+              runSpacing: 6,
+              children: [
+                Text(
+                  'Total: ${summary.totalIssues}',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                Text(
+                  'Revisados: $reviewedIssuesCount',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            LinearProgressIndicator(
+              value:
+                  summary.totalIssues == 0
+                      ? 0
+                      : reviewedIssuesCount / summary.totalIssues,
+              minHeight: 6,
+              borderRadius: BorderRadius.circular(999),
+              backgroundColor:
+                  Theme.of(context).colorScheme.surfaceContainerHighest,
+            ),
+            const SizedBox(height: 10),
             Text(
-              'Total: ${summary.totalIssues}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              'Progresso de revisão',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -694,6 +761,8 @@ class _IssuesByCategory extends StatelessWidget {
   final _IssueLayoutMode layoutMode;
   final Set<ReviewIssueType> activeFilters;
   final Set<String> activeRuleFilters;
+  final bool Function(ReviewIssue) isIssueReviewed;
+  final ValueChanged<ReviewIssue> onToggleIssueReviewed;
   final Set<String> collapsedRowCategoryIds;
   final ValueChanged<String> onToggleRowCategoryCollapse;
   final ValueChanged<_IssueLayoutMode> onLayoutModeChanged;
@@ -704,6 +773,8 @@ class _IssuesByCategory extends StatelessWidget {
     required this.layoutMode,
     required this.activeFilters,
     required this.activeRuleFilters,
+    required this.isIssueReviewed,
+    required this.onToggleIssueReviewed,
     required this.collapsedRowCategoryIds,
     required this.onToggleRowCategoryCollapse,
     required this.onLayoutModeChanged,
@@ -713,31 +784,31 @@ class _IssuesByCategory extends StatelessWidget {
   Widget build(BuildContext context) {
     final categories = <_IssueCategoryColumnData>[
       if (activeFilters.contains(ReviewIssueType.formattingTrigger))
-        _IssueCategoryColumnData(
+        _buildCategory(
           id: 'formatting',
           title: 'Formatação',
           icon: Icons.format_italic_rounded,
-          issues: _filterIssuesByRule(issueBuckets.formatting),
+          source: issueBuckets.formatting,
         ),
       if (activeFilters.contains(ReviewIssueType.wordSubstitution))
-        _IssueCategoryColumnData(
+        _buildCategory(
           id: 'substitution',
           title: 'Substituição',
           icon: Icons.find_replace_rounded,
-          issues: _filterIssuesByRule(issueBuckets.substitutions),
+          source: issueBuckets.substitutions,
         ),
       if (activeFilters.contains(ReviewIssueType.paragraphSymbol))
-        _IssueCategoryColumnData(
+        _buildCategory(
           id: 'symbol',
           title: 'Símbolo §',
           icon: Icons.rule_rounded,
-          issues: _filterIssuesByRule(issueBuckets.symbols),
+          source: issueBuckets.symbols,
         ),
     ];
 
     final filteredTotalIssues = categories.fold<int>(
       0,
-      (sum, item) => sum + item.issues.length,
+      (sum, item) => sum + item.unresolvedIssuesCount,
     );
 
     return Column(
@@ -794,9 +865,15 @@ class _IssuesByCategory extends StatelessWidget {
           )
         else
           layoutMode == _IssueLayoutMode.columns
-              ? _ColumnsIssuesLayout(categories: categories)
+              ? _ColumnsIssuesLayout(
+                categories: categories,
+                isIssueReviewed: isIssueReviewed,
+                onToggleIssueReviewed: onToggleIssueReviewed,
+              )
               : _RowsIssuesLayout(
                 categories: categories,
+                isIssueReviewed: isIssueReviewed,
+                onToggleIssueReviewed: onToggleIssueReviewed,
                 collapsedCategoryIds: collapsedRowCategoryIds,
                 onToggleCategoryCollapse: onToggleRowCategoryCollapse,
               ),
@@ -813,6 +890,52 @@ class _IssuesByCategory extends StatelessWidget {
         )
         .toList(growable: false);
   }
+
+  _IssueCategoryColumnData _buildCategory({
+    required String id,
+    required String title,
+    required IconData icon,
+    required List<ReviewIssue> source,
+  }) {
+    final filtered = _filterIssuesByRule(source);
+    return _IssueCategoryColumnData(
+      id: id,
+      title: title,
+      icon: icon,
+      issues: _orderIssuesByResolved(filtered),
+      unresolvedIssuesCount: _countUnresolvedIssues(filtered),
+    );
+  }
+
+  int _countUnresolvedIssues(List<ReviewIssue> source) {
+    var count = 0;
+    for (final issue in source) {
+      if (!isIssueReviewed(issue)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  List<ReviewIssue> _orderIssuesByResolved(List<ReviewIssue> source) {
+    if (source.isEmpty) return const <ReviewIssue>[];
+
+    final unresolved = <ReviewIssue>[];
+    final resolved = <ReviewIssue>[];
+
+    for (final issue in source) {
+      if (isIssueReviewed(issue)) {
+        resolved.add(issue);
+        continue;
+      }
+      unresolved.add(issue);
+    }
+
+    return List<ReviewIssue>.unmodifiable(<ReviewIssue>[
+      ...unresolved,
+      ...resolved,
+    ]);
+  }
 }
 
 class _IssueCategoryColumnData {
@@ -820,19 +943,27 @@ class _IssueCategoryColumnData {
   final String title;
   final IconData icon;
   final List<ReviewIssue> issues;
+  final int unresolvedIssuesCount;
 
   const _IssueCategoryColumnData({
     required this.id,
     required this.title,
     required this.icon,
     required this.issues,
+    required this.unresolvedIssuesCount,
   });
 }
 
 class _IssueCategoryColumn extends StatelessWidget {
   final _IssueCategoryColumnData data;
+  final bool Function(ReviewIssue) isIssueReviewed;
+  final ValueChanged<ReviewIssue> onToggleIssueReviewed;
 
-  const _IssueCategoryColumn({required this.data});
+  const _IssueCategoryColumn({
+    required this.data,
+    required this.isIssueReviewed,
+    required this.onToggleIssueReviewed,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -866,7 +997,7 @@ class _IssueCategoryColumn extends StatelessWidget {
                     ),
                   ),
                 ),
-                Chip(label: Text('${data.issues.length}')),
+                Chip(label: Text('${data.unresolvedIssuesCount}')),
               ],
             ),
             const SizedBox(height: 8),
@@ -881,7 +1012,13 @@ class _IssueCategoryColumn extends StatelessWidget {
               Column(
                 children: [
                   for (var i = 0; i < data.issues.length; i++) ...[
-                    _IssueCard(issue: data.issues[i], margin: EdgeInsets.zero),
+                    _IssueCard(
+                      issue: data.issues[i],
+                      isReviewed: isIssueReviewed(data.issues[i]),
+                      onToggleReviewed:
+                          () => onToggleIssueReviewed(data.issues[i]),
+                      margin: EdgeInsets.zero,
+                    ),
                     if (i < data.issues.length - 1) const SizedBox(height: 8),
                   ],
                 ],
@@ -895,8 +1032,14 @@ class _IssueCategoryColumn extends StatelessWidget {
 
 class _ColumnsIssuesLayout extends StatelessWidget {
   final List<_IssueCategoryColumnData> categories;
+  final bool Function(ReviewIssue) isIssueReviewed;
+  final ValueChanged<ReviewIssue> onToggleIssueReviewed;
 
-  const _ColumnsIssuesLayout({required this.categories});
+  const _ColumnsIssuesLayout({
+    required this.categories,
+    required this.isIssueReviewed,
+    required this.onToggleIssueReviewed,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -908,7 +1051,13 @@ class _ColumnsIssuesLayout extends StatelessWidget {
             children: [
               for (var i = 0; i < categories.length; i++) ...[
                 if (i > 0) const SizedBox(width: 12),
-                Expanded(child: _IssueCategoryColumn(data: categories[i])),
+                Expanded(
+                  child: _IssueCategoryColumn(
+                    data: categories[i],
+                    isIssueReviewed: isIssueReviewed,
+                    onToggleIssueReviewed: onToggleIssueReviewed,
+                  ),
+                ),
               ],
             ],
           );
@@ -917,7 +1066,11 @@ class _ColumnsIssuesLayout extends StatelessWidget {
         return Column(
           children: [
             for (var i = 0; i < categories.length; i++) ...[
-              _IssueCategoryColumn(data: categories[i]),
+              _IssueCategoryColumn(
+                data: categories[i],
+                isIssueReviewed: isIssueReviewed,
+                onToggleIssueReviewed: onToggleIssueReviewed,
+              ),
               if (i < categories.length - 1) const SizedBox(height: 12),
             ],
           ],
@@ -929,11 +1082,15 @@ class _ColumnsIssuesLayout extends StatelessWidget {
 
 class _RowsIssuesLayout extends StatelessWidget {
   final List<_IssueCategoryColumnData> categories;
+  final bool Function(ReviewIssue) isIssueReviewed;
+  final ValueChanged<ReviewIssue> onToggleIssueReviewed;
   final Set<String> collapsedCategoryIds;
   final ValueChanged<String> onToggleCategoryCollapse;
 
   const _RowsIssuesLayout({
     required this.categories,
+    required this.isIssueReviewed,
+    required this.onToggleIssueReviewed,
     required this.collapsedCategoryIds,
     required this.onToggleCategoryCollapse,
   });
@@ -975,7 +1132,12 @@ class _RowsIssuesLayout extends StatelessWidget {
       );
     }
 
-    return _IssueCard(issue: item.issue!, margin: EdgeInsets.zero);
+    return _IssueCard(
+      issue: item.issue!,
+      isReviewed: isIssueReviewed(item.issue!),
+      onToggleReviewed: () => onToggleIssueReviewed(item.issue!),
+      margin: EdgeInsets.zero,
+    );
   }
 }
 
@@ -1039,7 +1201,7 @@ class _IssueRowCategoryHeader extends StatelessWidget {
                 ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
               ),
             ),
-            Chip(label: Text('${category.issues.length}')),
+            Chip(label: Text('${category.unresolvedIssuesCount}')),
             IconButton(
               tooltip:
                   isCollapsed ? 'Expandir categoria' : 'Minimizar categoria',
@@ -1060,22 +1222,29 @@ class _IssueRowCategoryHeader extends StatelessWidget {
 
 class _IssueCard extends StatelessWidget {
   final ReviewIssue issue;
+  final bool isReviewed;
+  final VoidCallback onToggleReviewed;
   final EdgeInsetsGeometry margin;
 
   const _IssueCard({
     required this.issue,
+    required this.isReviewed,
+    required this.onToggleReviewed,
     this.margin = const EdgeInsets.only(bottom: 10),
   });
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Card(
       elevation: 0,
       margin: margin,
+      color: isReviewed ? colorScheme.primary.withOpacity(0.06) : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant,
+          color: isReviewed ? colorScheme.primary : colorScheme.outlineVariant,
           width: 0.5,
         ),
       ),
@@ -1084,11 +1253,39 @@ class _IssueCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _titleForType(issue.type),
-              style: Theme.of(
-                context,
-              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    _titleForType(issue.type),
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      decoration:
+                          isReviewed ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                TextButton.icon(
+                  onPressed: onToggleReviewed,
+                  icon: Icon(
+                    isReviewed
+                        ? Icons.check_circle_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    size: 18,
+                  ),
+                  label: const Text('Revisado'),
+                  style: TextButton.styleFrom(
+                    foregroundColor:
+                        isReviewed
+                            ? colorScheme.primary
+                            : colorScheme.onSurfaceVariant,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             Text('Parágrafo #${issue.paragraphIndex + 1}'),
