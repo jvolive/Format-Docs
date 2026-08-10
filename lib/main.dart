@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:format_docs/features/home/home_page.dart';
+import 'package:format_docs/features/remove_text_formatting/view/remove_text_formatting_screen.dart';
 import 'package:format_docs/features/rules/view/rules_screen.dart';
 import 'package:format_docs/features/supabase/auth/auth_view_model.dart';
 import 'package:format_docs/features/supabase/auth/view/login_screen.dart';
@@ -30,6 +31,8 @@ class App extends StatelessWidget {
         HomePage.routeName: (_) => const HomePage(),
         ReviewDocsScreen.routeName: (_) => const ReviewDocsScreen(),
         RulesScreen.routeName: (_) => const RulesScreen(),
+        RemoveTextFormattingScreen.routeName:
+            (_) => const RemoveTextFormattingScreen(),
       },
     );
   }

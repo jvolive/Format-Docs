@@ -31,3 +31,37 @@ void Function() interceptHtmlPaste({
     html.document.removeEventListener('paste', listener);
   };
 }
+
+/// Intercepta paste global e entrega conteúdo de clipboard para `onPasted`.
+///
+/// Quando `preferHtml` for `true`, usa `text/html` quando disponível;
+/// caso contrário, usa `text/plain`.
+void Function() interceptClipboardPaste({
+  required HtmlPastePredicate canHandlePaste,
+  required void Function(String content, {required bool isHtml}) onPasted,
+  bool preferHtml = true,
+}) {
+  void listener(html.Event event) {
+    if (!canHandlePaste()) return;
+
+    final pasteEvent = event as html.ClipboardEvent;
+    final clipboardData = pasteEvent.clipboardData;
+    if (clipboardData == null) return;
+
+    final htmlContent = clipboardData.getData('text/html');
+    final plainContent = clipboardData.getData('text/plain');
+
+    final isHtml = preferHtml && htmlContent.isNotEmpty;
+    final content = isHtml ? htmlContent : plainContent;
+    if (content.isEmpty) return;
+
+    pasteEvent.preventDefault();
+    onPasted(content, isHtml: isHtml);
+  }
+
+  html.document.addEventListener('paste', listener);
+
+  return () {
+    html.document.removeEventListener('paste', listener);
+  };
+}
